@@ -26,10 +26,36 @@ def load_processed_session(data_folder, dir_name, file_name):
     session_df = pd.read_csv(path, index_col=0)
     return session_df
 
+def load_stitched_session(data_folder, m, d):
+    path = generate_stitched_session_path(data_folder, m, d)
+    session_df = pd.read_csv(path, index_col=0)
+    return session_df
+
+def load_stitched_all_mice_session(data_folder, d):
+    path = generate_stitched_all_mice_session_path(data_folder, d)
+    session_df = pd.read_csv(path, index_col=0)
+    return session_df
+
 def load_session_log(data_folder, log_name):
     path = os.path.join(data_folder, log_name)
     session_log = pd.read_csv(path, index_col=0)
     return session_log
+
+def save_log(log_df, data_folder, filename):
+    path = os.path.join(data_folder, filename)
+    log_df.to_csv(path, index=False)
+
+def generate_stitched_session_path(stitched_folder, m, d):
+    return os.path.join(stitched_folder, f'{d}_{m}', f'processed_data_{m}_{d}.csv')
+
+def generate_stitched_all_trials_path(stitched_folder, m, d):
+    return os.path.join(stitched_folder, f'{d}_{m}', f'{d}_{m}_all_trials_analyzed.csv')
+
+def generate_stitched_all_mice_session_path(data_folder, d):
+    return os.path.join(data_folder, d, f'processed_data_{d}.csv')
+
+def generate_stitched_all_mice_all_trials_path(data_folder, d):
+    return os.path.join(data_folder, d, f'{d}_all_trials_analyzed.csv')
 
 def get_session_info_by_dirname(session_log, dir_name, column_name):
     return session_log.loc[session_log['dir'] == dir_name, column_name].tolist()[0]
@@ -50,6 +76,13 @@ def load_all_trials_analyzed(data_folder, dir_name):
     all_trials_analyzed_df = pd.read_csv(path, index_col=0)
     return all_trials_analyzed_df
 
+def load_stitched_all_trials_analyzed(data_folder, m, d):
+    dir_name = f'{d}_{m}'
+    filename = f'{d}_{m}_all_trials_analyzed.csv'
+    path = os.path.join(data_folder, dir_name, filename)
+    all_trials_analyzed_df = pd.read_csv(path, index_col=0)
+    return all_trials_analyzed_df
+
 def load_all_blocks(data_folder, dir_name):
     filename = f'{dir_name}_all_blocks.csv'
     path = os.path.join(data_folder, dir_name, filename)
@@ -59,22 +92,16 @@ def load_all_blocks(data_folder, dir_name):
 def generate_mouse_list(session_log):
     mouse_list = session_log.mouse.unique().tolist()
     mouse_list.sort()
-    print(mouse_list)
     return mouse_list
+
+def generate_date_list(session_log):
+    date_list = session_log.date.unique().tolist()
+    date_list.sort()
+    return date_list
 
 def select_good_trials(all_trials):
     good_trials = all_trials.loc[all_trials['good_trial'] == True]
-    return good_trials
-
-def get_test_session(data_folder, training_session_log, session_num):
-    dir_name = training_session_log.dir[session_num]
-    file_name = training_session_log.filename[session_num]
-    session = load_session(data_folder, dir_name, file_name)
-    return session
-
-def get_test_trial(session, trial_num):
-    trial = session.loc[session['session_trial_num'] == trial_num]
-    return trial
+    return good_trials  
 
 def linear_fit(df, x_column_name, y_column_name):
     x = df[x_column_name]
