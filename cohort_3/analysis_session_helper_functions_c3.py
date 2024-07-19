@@ -131,13 +131,15 @@ def get_trial_wait_data(trial):
         time_waited = consumption_start_time - wait_start_time
         consumption = trial.loc[trial['state'] == 'in_consumption']
         num_consumption_lick = len(consumption.loc[(consumption['key'] == 'lick') & (consumption['value'] == 1)])
+        num_pump = len(consumption.loc[(consumption['key'] == 'pump') & (consumption['value'] == 1)])
     else:
         miss_trial = True
         reward = math.nan
         time_waited = math.nan
         num_consumption_lick = math.nan
+        num_pump = math.nan
 
-    return [miss_trial, time_waited, reward, num_consumption_lick]
+    return [miss_trial, time_waited, reward, num_consumption_lick, num_pump]
 
 def get_trial_performance(trial):
     bg_data = get_trial_bg_data(trial)

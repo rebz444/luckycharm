@@ -26,8 +26,8 @@ def load_processed_session(data_folder, dir_name, file_name):
     session_df = pd.read_csv(path, index_col=0)
     return session_df
 
-def load_stitched_session(data_folder, m, d):
-    path = generate_stitched_session_path(data_folder, m, d)
+def load_stitched_session(data_folder, mouse, date):
+    path = generate_stitched_session_path(data_folder, mouse, date)
     session_df = pd.read_csv(path, index_col=0)
     return session_df
 
