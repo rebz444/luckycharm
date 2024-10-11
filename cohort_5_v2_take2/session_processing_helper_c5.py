@@ -12,18 +12,18 @@ def check_proper_end(last_trial):
         return True
     else:
         return False
-###### can delete this whole check proper end part
-def get_session_basics(session_df):
-    num_trials = session_df.session_trial_num.max() 
-    last_trial = session_df.loc[session_df['session_trial_num'] == num_trials]
+
+def get_session_basics(events):
+    num_trials = events.session_trial_num.max() 
+    last_trial = events.loc[events['session_trial_num'] == num_trials]
     proper_end = check_proper_end(last_trial)
     if not proper_end:
         num_trials -= 1
-        last_trial = session_df.loc[session_df['session_trial_num'] == num_trials]
+        last_trial = events.loc[events['session_trial_num'] == num_trials]
 
     num_blocks = last_trial.loc[(last_trial['key'] == 'trial') & (last_trial['value'] == 1), 'block_num'].iloc[0] + 1
-    total_reward = round(session_df.reward_size.sum(), 2)
-    total_time = round((session_df.session_time.max() - session_df.session_time.min()), 2)
+    total_reward = round(events.reward_size.sum(), 2)
+    total_time = round((events.session_time.max() - events.session_time.min()), 2)
     session_basics = {'num_blocks': num_blocks,
                       'num_trials': num_trials + 1,
                       'rewards': total_reward,
@@ -72,8 +72,8 @@ def generate_trials(session_info, events):
     trials = pd.DataFrame(trial_info_list)
     return trials
 
-def align_trial_number(session, all_trials):
-    for _, trial_basics in all_trials.iterrows():
+def align_trial_number(session, trials):
+    for _, trial_basics in trials.iterrows():
         session.loc[session['session_time'].between(trial_basics['start_time'], trial_basics['end_time']), 
                 'block_num'] = trial_basics['block_num']
         session.loc[session['session_time'].between(trial_basics['start_time'], trial_basics['end_time']), 
@@ -124,8 +124,7 @@ def get_trial_wait_data(trial):
     else:
         miss_trial = True
         reward = math.nan
-        # time_waited = math.nan
-        time_waited = 60
+        time_waited = math.nan
         num_consumption_lick = math.nan
         num_pump = math.nan
     return {'miss_trial': miss_trial,
@@ -149,5 +148,5 @@ def get_trial_data_df(session_by_trial):
     for t, trial in session_by_trial:
         trial_data = get_trial_performance(t, trial)
         trial_data_list.append(trial_data)
-    all_trials_data = pd.DataFrame(trial_data_list)
-    return all_trials_data
+    trials_data = pd.DataFrame(trial_data_list)
+    return trials_data
