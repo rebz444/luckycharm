@@ -14,16 +14,3 @@ def get_session_tw(all_trials):
     tw_med = all_trials.time_waited.median()
     tw_std = all_trials.time_waited.std()
     return [tw_mean, tw_med, tw_std]
-
-def get_block_tw(all_trials):
-    tw_list = []
-    blk_type_list = ['l', 's']
-    for blk_type in blk_type_list: 
-        blk = all_trials.loc[all_trials['blk_type']==blk_type]
-        tw_list.append(blk.time_waited.mean())
-        tw_list.append(blk.time_waited.median())
-        tw_list.append(blk.time_waited.std())
-    return tw_list
-
-
-

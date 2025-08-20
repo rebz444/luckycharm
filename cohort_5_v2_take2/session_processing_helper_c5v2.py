@@ -166,9 +166,11 @@ def get_trial_basics(trial):
     return trial_basics
 
 def get_trial_bg_data(trial):
+    bg_time = trial[(trial['key'] == 'background') & (trial['value'] == 1)]['session_time'].iloc[0]
+    wait_time = trial[(trial['key'] == 'wait') & (trial['value'] == 1)]['session_time'].iloc[0]
+    bg_length = wait_time - bg_time
     bg_events = trial.loc[trial.state == 'in_background']
     bg_drawn = float(bg_events.iloc[0]['time_bg'])
-    bg_length = bg_events.session_time.max() - bg_events.session_time.min()
     bg_repeats = trial['key'].value_counts()['background']
     num_bg_licks = len(bg_events.loc[(bg_events['key'] == 'lick') & (bg_events['value'] == 1)])
     return {'bg_drawn': bg_drawn,
