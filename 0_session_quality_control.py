@@ -3,6 +3,7 @@
 Session Quality Control Script
 Backs up raw data
 removes test sessions, sessions with corrupted files, short sessions, and crashed sessions
+validates session directory names match metadata
 sorts sessions by experiments
 """
 
@@ -32,6 +33,10 @@ def backup_directory(source_path):
             source_item = os.path.join(source_path, item)
             backup_item = os.path.join(backup_path, item)
             
+            # Skip if this is the backup directory itself
+            if item.endswith('_backup'):
+                continue
+                
             if os.path.isdir(source_item) and not os.path.exists(backup_item):
                 try:
                     shutil.copytree(source_item, backup_item)
@@ -57,13 +62,17 @@ def delete_test_folders(data_dir):
         return
     
     print(f"Found {len(test_folders)} test folders to delete:")
+    for folder in test_folders:
+        print(f"  - {os.path.basename(folder)}")
     if input("Proceed with deletion? (y/N): ").lower() == 'y':
+        deletion_count = 0
         for folder in test_folders:
             try:
                 shutil.rmtree(folder)
-                print(f"Deleted: {os.path.basename(folder)}")
+                deletion_count += 1
             except Exception as e:
                 print(f"Error deleting {os.path.basename(folder)}: {e}")
+        print(f"Total test folders deleted: {deletion_count}")
     else:
         print("Deletion cancelled")
 
@@ -72,8 +81,7 @@ def check_and_clean_sessions_with_corrupted_files(data_folder):
     files_check = []
     for entry in os.scandir(data_folder):
         if entry.is_dir():
-            dir_name = entry.name
-            session_path = os.path.join(data_folder, dir_name)
+            session_path = os.path.join(data_folder, entry.name)
             events_found = False
             meta_found = False
             events_empty = True
@@ -125,9 +133,9 @@ def check_and_clean_sessions_with_corrupted_files(data_folder):
                             'session': row['dir'], 'reason': row['reason'],
                             'deleted': True, 'timestamp': pd.Timestamp.now()
                         })
-                        print(f"Deleted: {row['dir']} - {row['reason']}")
                     except Exception as e:
                         print(f"Error deleting {row['dir']}: {e}")
+            print(f"\nTotal sessions deleted: {len(deletion_record)}")
         else:
             print("Deletion cancelled")
     else:
@@ -190,13 +198,43 @@ def identify_and_clean_short_or_crashed_sessions(data_folder, short_threshold=20
                         'session': row['dir'], 'reason': row['reason'],
                         'deleted': True, 'timestamp': pd.Timestamp.now()
                     })
-                    print(f"Deleted: {row['dir']} - {row['reason']}")
                 except Exception as e:
                     print(f"Error deleting {row['dir']}: {e}")
-        else:
-            print("Deletion cancelled")
+        
+        print(f"\nTotal sessions deleted: {len(deletion_record)}")
+    else:
+        print("Deletion cancelled")
     
     return pd.DataFrame(deletion_record)
+
+def validate_session_directory_names(data_folder):
+    """Check if meta JSON files match their directory names."""
+    mismatched_sessions = []
+    
+    for root, _, files in os.walk(data_folder):
+        for file in files: 
+            if file.startswith("meta_") and file.endswith(".json"):
+                try:
+                    with open(os.path.join(root, file)) as f:
+                        session_data = json.load(f)
+                    
+                    # Get config data based on date
+                    date_str = file.split('_')[1]
+                    config_data = session_data.get('session_config', session_data) if date_str >= '2024-04-16' else session_data
+                    
+                    # Check if metadata matches directory name
+                    meta_dir = f"{config_data['date']}_{config_data['time']}_{config_data['mouse']}"
+                    if meta_dir != os.path.basename(root):
+                        mismatched_sessions.append({
+                            'actual_dir': os.path.basename(root),
+                            'meta_dir': meta_dir,
+                            **config_data
+                        })
+                        
+                except Exception as e:
+                    print(f"Error processing file {file}: {e}")
+
+    return pd.DataFrame(mismatched_sessions).sort_values('meta_dir') if mismatched_sessions else pd.DataFrame()
 
 def sort_sessions_by_experiments(data_dir, exp_info):
     """Sort sessions into experiment folders based on mouse names"""
@@ -248,41 +286,47 @@ def main():
     with open('exp_cohort_info.json', 'r') as f:
         exp_info = json.load(f)['experiments']
 
-    print("=== Session Quality Control Script ===")
+    print("\n=== Session Quality Control Script ===")
     print(f"Data directory: {data_dir}")
     print(f"Found {len(exp_info)} experiments: {list(exp_info.keys())}\n")
     
     # Step 1: Backup raw data
-    print("Step 1: Backing up raw data...")
+    print("\nStep 1: Backing up raw data...")
     if not backup_directory(data_dir):
         print("Backup failed. Aborting.")
         return
-    print()
     
     # Step 2: Delete test folders
-    print("Step 2: Removing test folders...")
+    print("\nStep 2: Removing test folders...")
     delete_test_folders(data_dir)
-    print()
     
     # Step 3: Check session file quality and clean problematic sessions
-    print("Step 3: Checking session file quality and cleaning problematic sessions...")
-    missing_meta, missing_events, empty_meta, empty_events, deletion_df_3 = check_and_clean_sessions_with_corrupted_files(data_dir)
-    print()
+    print("\nStep 3: Checking session file quality and cleaning problematic sessions...")
+    _, _, _, _, deletion_df_3 = check_and_clean_sessions_with_corrupted_files(data_dir)
     
     # Step 4: Identify and clean both short sessions and crashed sessions
-    print("Step 4: Identifying and cleaning short sessions and crashed sessions...")
+    print("\nStep 4: Identifying and cleaning short sessions and crashed sessions...")
     deletion_df_4 = identify_and_clean_short_or_crashed_sessions(data_dir, short_threshold=20)
-    print()
-    
+        
     # Update deletion record
     update_deletion_record(data_dir, [deletion_df_3, deletion_df_4])
+    
+    # Step 5: Validate session directory names match metadata
+    print("\nStep 5: Validating session directory names match metadata...")
+    mismatched_df = validate_session_directory_names(data_dir)
+    if not mismatched_df.empty:
+        print(f"Found {len(mismatched_df)} sessions with mismatched directory names:")
+        print(mismatched_df[['actual_dir', 'meta_dir', 'total_reward', 'total_trial', 'avg_tw']].to_string(index=False))
+        print("Please fix the mismatched sessions before proceeding.\n")
+        return
+    else:
+        print("All session directory names match their metadata.")
 
-    # Step 5: Sort sessions by experiments
-    print("Step 5: Sorting sessions by experiments...")
+    # Step 6: Sort sessions by experiments
+    print("\nStep 6: Sorting sessions by experiments...")
     sort_sessions_by_experiments(data_dir, exp_info)
-    print()
 
-    print("Session quality control completed!")
+    print("\nSession quality control completed!\n")
 
 if __name__ == "__main__":
     main()
