@@ -1,5 +1,6 @@
 import os
 import math
+from pickle import FALSE
 import warnings
 
 import processing_helper_0827 as helper_pre
@@ -14,11 +15,7 @@ warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrameGr
 data_dir = '/Users/rebekahzhang/data/behavior_data'
 exp = 'exp2'
 data_folder = os.path.join(data_dir, exp)
-
-# Set to True to regenerate all files, False to skip existing files
-regenerate = True
-
-utils.backup(data_folder)
+meta_change_date = '2024-04-16'
 
 # Generate all sessions
 sessions_all = helper_pre.generate_sessions_all(data_folder)
@@ -26,16 +23,16 @@ sessions_all = helper_pre.generate_sessions_all(data_folder)
 # Split sessions by metadata change date (2024-04-16)
 sessions_pre_meta = sessions_all.loc[
     (sessions_all.training == 'regular') & 
-    (sessions_all.date < '2024-04-16')
+    (sessions_all.date < meta_change_date)
 ].reset_index()
 
 sessions_post_meta = sessions_all.loc[
     (sessions_all.training == 'regular') & 
-    (sessions_all.date >= '2024-04-16')
+        (sessions_all.date >= meta_change_date)
 ].reset_index()
 
-print(f"Found {len(sessions_pre_meta)} sessions before 2024-04-16 to process")
-print(f"Found {len(sessions_post_meta)} sessions after 2024-04-16 to process")
+print(f"Found {len(sessions_pre_meta)} sessions before {meta_change_date} to process")
+print(f"Found {len(sessions_post_meta)} sessions after {meta_change_date} to process")
 
 if len(sessions_pre_meta) == 0 and len(sessions_post_meta) == 0:
     print("No sessions found to process. Exiting.")
@@ -131,7 +128,7 @@ def process_events_post_meta_change(data_folder, session_info):
 # MAIN PROCESSING FUNCTIONS
 # =============================================================================
 
-def process_session_batch(sessions_df, process_function, batch_name):
+def process_session_batch(sessions_df, process_function, batch_name, regenerate):
     """Process a batch of sessions with the specified processing function."""
     total_sessions = len(sessions_df)
     processed_count = 0
@@ -162,20 +159,20 @@ def process_session_batch(sessions_df, process_function, batch_name):
     print(f"\n📊 {batch_name} Complete: {processed_count} processed, {skipped_count} skipped, {len(problematic_sessions)} errors")
     return problematic_sessions
 
-def main():
+def main(regenerate):
     """Main function to process all sessions before and after metadata change."""
     all_problematic_sessions = []
     
     # Process pre-metadata change sessions
     if len(sessions_pre_meta) > 0:
         print(f"\n🔄 Processing {len(sessions_pre_meta)} sessions before metadata change...")
-        pre_problematic = process_session_batch(sessions_pre_meta, process_events_pre_meta_change, "Pre-Metadata Change")
+        pre_problematic = process_session_batch(sessions_pre_meta, process_events_pre_meta_change, "Pre-Metadata Change", regenerate)
         all_problematic_sessions.extend(pre_problematic)
     
     # Process post-metadata change sessions
     if len(sessions_post_meta) > 0:
         print(f"\n🔄 Processing {len(sessions_post_meta)} sessions after metadata change...")
-        post_problematic = process_session_batch(sessions_post_meta, process_events_post_meta_change, "Post-Metadata Change")
+        post_problematic = process_session_batch(sessions_post_meta, process_events_post_meta_change, "Post-Metadata Change", regenerate)
         all_problematic_sessions.extend(post_problematic)
     
     # Show final results
@@ -184,7 +181,8 @@ def main():
         problematic_df = pd.DataFrame(all_problematic_sessions)
         print(problematic_df.to_string())
     else:
-        print("\n🎉 All sessions processed successfully!")
+        print("\n🎉 All sessions processed successfully!\n")
 
 if __name__ == "__main__":
-    main()
+    regenerate = False
+    main(regenerate)
