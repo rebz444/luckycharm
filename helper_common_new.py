@@ -16,6 +16,20 @@ def add_cohort_column(sessions_all, cohort_info):
     sessions_all['cohort'] = sessions_all['mouse'].map(mouse_to_cohort)
     return sessions_all
 
+def modify_total_trial(row):
+    """Modify total trial count based on ending code."""
+    ending_code = row['ending_code']
+    if pd.isna(ending_code):
+        return row['total_trial']
+    
+    ending_code = str(ending_code).lower()
+    if ending_code == 'pygame' or ending_code == 'manual':
+        return row['total_trial'] - 1
+    elif ending_code == 'miss':
+        return row['total_trial'] - 5
+    else:
+        return row['total_trial']
+
 def generate_sessions_all(data_folder):
     """Generate DataFrame from session metadata JSON files."""
     data = []
@@ -39,25 +53,7 @@ def generate_sessions_all(data_folder):
 
     sessions_all = pd.DataFrame(data)
     sessions_all['dir'] = sessions_all['date'] + '_' + sessions_all['time'] + '_' + sessions_all['mouse']
+    sessions_all['total_trial'] = sessions_all.apply(modify_total_trial, axis=1)
     sessions_all = add_cohort_column(sessions_all, cohort_info)
     sessions_all = sessions_all.drop(columns=['trainer', 'record', 'forward_file', 'pump_ul_per_turn'])
     return sessions_all.sort_values('dir')
-
-def get_trial_basics(trial):
-    """Extract basic trial info (trial numbers, block info, timing)."""
-    trial_start = trial.loc[(trial['key'] == 'trial') & (trial['value'] == 1)].iloc[0]
-    trial_end = trial.loc[(trial['key'] == 'trial') & (trial['value'] == 0)].iloc[0]
-
-    trial_basics = {
-        'session_trial_num': trial_start['session_trial_num'],
-        'block_trial_num': trial_start['block_trial_num'],
-        'block_num': trial_start['block_num'],
-        'start_time': trial_start['session_time'],
-        'end_time': trial_end['session_time']
-    }
-    return trial_basics
-
-def add_trial_time(trial):
-    """Add trial_time column relative to trial start."""
-    trial['trial_time'] = trial['session_time'] - trial['session_time'].iloc[0]
-    return trial
