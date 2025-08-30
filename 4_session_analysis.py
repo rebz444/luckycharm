@@ -3,7 +3,7 @@ import shutil
 import pandas as pd
 import warnings
 
-import processing_helper_0827 as helper_pre
+import helper_common_new as helper_common
 import session_processing_helper as helper
 import utils
 
@@ -18,7 +18,7 @@ meta_change_date = '2024-04-16'
 
 def correct_sessions_training(data_folder, save_log=True):
     """Generate and correct sessions training data for both pre and post meta change."""
-    sessions_all = helper_pre.generate_sessions_all(data_folder)
+    sessions_all = helper_common.generate_sessions_all(data_folder)
     
     # Split sessions by meta change date
     sessions_pre_meta = sessions_all.loc[
