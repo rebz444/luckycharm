@@ -3,8 +3,7 @@ import math
 from pickle import FALSE
 import warnings
 
-import session_processing_helper as helper_post
-import helper_common_new as helper_common
+import session_processing_helper as helper
 import utils
 
 import pandas as pd
@@ -15,18 +14,21 @@ warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrameGr
 data_dir = '/Users/rebekahzhang/data/behavior_data'
 exp = 'exp2'
 data_folder = os.path.join(data_dir, exp)
-meta_change_date = '2024-04-16'
 
 # Generate all sessions
-sessions_all = helper_common.generate_sessions_all(data_folder)
-sessions_training = sessions_all.loc[sessions_all.training == 'regular']
+sessions_all = helper.generate_sessions_all(data_folder)
+
+# Save sessions_all as CSV in data_folder
+sessions_all_path = os.path.join(data_folder, 'sessions_all_pre_processing.csv')
+sessions_all.to_csv(sessions_all_path, index=False)
+print(f"Saved sessions_all.csv to {sessions_all_path}")
 
 # Split sessions by metadata change date (2024-04-16)
-sessions_pre_meta = sessions_all.loc[sessions_all.date < meta_change_date].reset_index()
-sessions_post_meta = sessions_all.loc[sessions_all.date >= meta_change_date].reset_index()
+sessions_pre_meta = sessions_all.loc[sessions_all.version == 'pre'].reset_index()
+sessions_post_meta = sessions_all.loc[sessions_all.version == 'post'].reset_index()
 
-print(f"Found {len(sessions_pre_meta)} sessions before {meta_change_date} to process")
-print(f"Found {len(sessions_post_meta)} sessions after {meta_change_date} to process")
+print(f"Found {len(sessions_pre_meta)} sessions before metadata change to process")
+print(f"Found {len(sessions_post_meta)} sessions after metadata change to process")
 
 # =============================================================================
 # PRE-METADATA CHANGE PROCESSING FUNCTIONS
@@ -50,7 +52,7 @@ def generate_trials(events, max_trial_num):
     for t in range(int(max_trial_num)+1):
         trial = events.loc[events['session_trial_num'] == t]
         if not trial.empty:
-            trial_basics = helper_post.get_trial_basics(trial)
+            trial_basics = helper.get_trial_basics(trial)
             trial_info_list.append(trial_basics)
     trials = pd.DataFrame(trial_info_list)
     return trials
@@ -97,7 +99,7 @@ def process_events_pre_meta_change(data_folder, session_info):
     
     # Add trial states and timing
     events = events.groupby('session_trial_num', group_keys=False).apply(align_trial_states)
-    events_processed = events.groupby('session_trial_num', group_keys=False).apply(helper_post.add_trial_time)
+    events_processed = events.groupby('session_trial_num', group_keys=False).apply(helper.add_trial_time)
     
     return events_processed
 
@@ -109,8 +111,8 @@ def process_events_post_meta_change(data_folder, session_info):
     """Process events for sessions after metadata change (post 2024-04-16)."""
     # Load and process events using post-metadata helper functions
     events = pd.read_csv(utils.generate_events_path(data_folder, session_info), low_memory=False)
-    events = helper_post.process_events(session_info, events)
-    events_processed = events.groupby('session_trial_num', group_keys=False).apply(helper_post.add_trial_time)
+    events = helper.process_events(session_info, events)
+    events_processed = events.groupby('session_trial_num', group_keys=False).apply(helper.add_trial_time)
     
     return events_processed
 

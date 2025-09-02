@@ -3,8 +3,7 @@ import math
 import pandas as pd
 import shutil
 
-import session_processing_helper as helper
-import helper_common_new as helper_common       
+import session_processing_helper as helper     
 import utils
 
 data_dir = '/Users/rebekahzhang/data/behavior_data'
@@ -148,7 +147,7 @@ def process_all_sessions():
     utils.backup(data_folder)
     
     # Generate all sessions
-    sessions_all = helper_common.generate_sessions_all(data_folder)
+    sessions_all = pd.read_csv(os.path.join(data_folder, 'sessions_all_pre_processing.csv'))
     
     # Process pre-meta change sessions
     print("\n" + "="*50)
@@ -157,7 +156,7 @@ def process_all_sessions():
     
     sessions_pre_meta = sessions_all.loc[
         (sessions_all.training == 'regular') & 
-        (sessions_all.date < meta_change_date)
+        (sessions_all.version == 'pre')
     ].reset_index()
     
     if not sessions_pre_meta.empty:
@@ -176,7 +175,7 @@ def process_all_sessions():
     
     sessions_post_meta = sessions_all.loc[
         (sessions_all.training == 'regular') & 
-        (sessions_all.date > meta_change_date)
+        (sessions_all.version == 'post')
     ].reset_index()
     
     if not sessions_post_meta.empty:
