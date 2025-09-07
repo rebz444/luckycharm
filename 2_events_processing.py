@@ -20,7 +20,7 @@ sessions_all = helper.generate_sessions_all(data_folder)
 
 # Save sessions_all as CSV in data_folder
 sessions_all_path = os.path.join(data_folder, 'sessions_all_pre_processing.csv')
-sessions_all.to_csv(sessions_all_path, index=False)
+utils.save_log(sessions_all, data_folder, 'sessions_all_pre_processing.csv')
 print(f"Saved sessions_all.csv to {sessions_all_path}")
 
 # Split sessions by metadata change date (2024-04-16)
@@ -176,5 +176,4 @@ def main(regenerate):
         print("\n🎉 All sessions processed successfully!\n")
 
 if __name__ == "__main__":
-    regenerate = False
-    main(regenerate)
+    main(regenerate=False)

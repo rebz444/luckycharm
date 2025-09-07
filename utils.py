@@ -7,19 +7,6 @@ import pandas as pd
 # File and folder operations
 # =============================================================================
 
-def delete_folders(folder_list, data_folder):
-    """Delete folders from the given list."""
-    if folder_list:
-        for folder in folder_list:
-            full_path = os.path.join(data_folder, folder)
-            if os.path.exists(full_path):
-                shutil.rmtree(full_path)
-                print(f"Deleted folder: {full_path}")
-            else:
-                print(f"Folder not found: {full_path}")
-    else:
-        print("no sessions to delete")
-
 def backup(source_dir):
     """Create a copy for source_dir in the same path parallel to source_dir."""
     data_folder = os.path.dirname(source_dir)
@@ -30,15 +17,6 @@ def backup(source_dir):
         print(f"{os.path.basename(source_dir)} backed up")
     else:
         print(f"{os.path.basename(destination_dir)} already exist")
-
-def remove_sessions(sessions_to_remove_df, data_folder):
-    """Remove sessions based on the provided DataFrame."""
-    if len(sessions_to_remove_df) == 0:
-        print('no sessions to delete')
-    else:
-        for _, session_info in sessions_to_remove_df.iterrows():
-            shutil.rmtree(os.path.join(data_folder, session_info.dir))
-            print(f'{session_info.dir} deleted')
 
 # =============================================================================
 # Data loading functions
@@ -60,9 +38,9 @@ def load_session_log(data_folder, log_name):
 # =============================================================================
 
 def save_log(log_df, data_folder, filename):
-    """Save log DataFrame to CSV without index."""
+    """Save log DataFrame to CSV with index."""
     path = os.path.join(data_folder, filename)
-    log_df.to_csv(path, index=False)
+    log_df.to_csv(path, index=True)
 
 def save_as_csv(df, folder, filename):
     """Save DataFrame to CSV with index."""

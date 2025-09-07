@@ -44,7 +44,7 @@ def correct_sessions_training(data_folder, save_log=True):
     corrected_sessions_training = corrected_sessions_training.groupby('mouse', group_keys=False).apply(helper.assign_session_numbers)
     
     if save_log:
-        utils.save_as_csv(df=corrected_sessions_training, folder=data_folder, filename=f'sessions_training_{exp}.csv')
+        utils.save_log(corrected_sessions_training, data_folder, f'sessions_training_{exp}.csv')
         print("Session log saved")
     
     return corrected_sessions_training

@@ -15,6 +15,37 @@ meta_change_date = '2024-04-16'
 # QUALITY CONTROL FUNCTIONS
 # =============================================================================
 
+def check_session_files(data_folder):
+    """Check session folders for required files and their status."""
+    files_check = []
+    
+    for entry in os.scandir(data_folder):
+        if not entry.is_dir():
+            continue
+            
+        session_path = os.path.join(data_folder, entry.name)
+        files = [f for f in os.scandir(session_path) if f.is_file() and not f.name.startswith('.')]
+        
+        events_files = [f for f in files if f.name.startswith("events_")]
+        meta_files = [f for f in files if f.name.startswith("meta_")]
+        
+        files_check.append({
+            'dir': entry.name,
+            'events': bool(events_files),
+            'meta': bool(meta_files),
+            'events_empty': not events_files or all(f.stat().st_size == 0 for f in events_files),
+            'meta_empty': not meta_files or all(f.stat().st_size == 0 for f in meta_files)
+        })
+
+    files_check_df = pd.DataFrame(files_check).sort_values("dir")
+    
+    return (
+        files_check_df[files_check_df.meta == False],
+        files_check_df[files_check_df.events == False],
+        files_check_df[(files_check_df.meta == True) & (files_check_df.meta_empty == True)],
+        files_check_df[(files_check_df.events == True) & (files_check_df.events_empty == True)]
+    )
+
 def backup_directory(source_path):
     """Create backup or update existing with new sessions."""
     backup_path = source_path + "_backup"
@@ -416,7 +447,7 @@ def get_trial_wait_data(trial):
     consumption_events = trial.loc[trial['key'] == 'consumption']
     
     if consumption_events.empty:
-        return {'miss_trial': True, 'time_waited': 0, 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
+        return {'miss_trial': True, 'time_waited': 60, 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
     
     consumption_start = consumption_events.iloc[0]['session_time']
     consumption_data = trial.loc[trial['state'] == 'in_consumption']
