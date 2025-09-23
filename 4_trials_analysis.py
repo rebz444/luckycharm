@@ -13,10 +13,10 @@ warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrameGr
 data_dir = '/Users/rebekahzhang/data/behavior_data'
 exp = 'exp2'
 data_folder = os.path.join(data_dir, exp)
-meta_change_date = '2024-04-16'
 
 def correct_sessions_training(data_folder, save_log=True):
     """Generate and correct sessions training data for both pre and post meta change."""
+    print("\nCorrecting sessions training data...")
     sessions_all = helper.generate_sessions_all(data_folder)
     sessions_training = sessions_all.loc[sessions_all.training == 'regular'].reset_index()
     
@@ -45,13 +45,13 @@ def correct_sessions_training(data_folder, save_log=True):
     
     if save_log:
         utils.save_log(corrected_sessions_training, data_folder, f'sessions_training_{exp}.csv')
-        print("Session log saved")
+        print("Session log saved\n")
     
     return corrected_sessions_training
 
-def process_trials_generation(sessions_training, data_folder, regenerate=False):
+def batch_generate_trials(sessions_training, data_folder, regenerate_trials=False):
     """Generate trials for all sessions and return problematic sessions."""
-    print("Generating trials data...")
+    print("\nGenerating trials data...")
     
     problematic_sessions = pd.DataFrame(columns=sessions_training.columns)
     processed_count = 0
@@ -61,7 +61,7 @@ def process_trials_generation(sessions_training, data_folder, regenerate=False):
     for idx, (_, session_info) in enumerate(sessions_training.iterrows(), 1):
         try: 
             trials_path = utils.generate_trials_path(data_folder, session_info)
-            if os.path.isfile(trials_path) and not regenerate:
+            if os.path.isfile(trials_path) and not regenerate_trials:
                 skipped_count += 1
                 continue
             
@@ -83,9 +83,9 @@ def process_trials_generation(sessions_training, data_folder, regenerate=False):
     
     return problematic_sessions
 
-def analyze_trials(sessions_training, data_folder, regenerate=False):
+def analyze_trials(sessions_training, data_folder, regenerate_analysis=False):
     """Analyze trials for all sessions and return problematic sessions."""
-    print("Analyzing trials data...")
+    print("\nAnalyzing trials data...")
     
     problematic_sessions = pd.DataFrame(columns=sessions_training.columns)
     processed_count = 0
@@ -95,7 +95,7 @@ def analyze_trials(sessions_training, data_folder, regenerate=False):
     for idx, (_, session_info) in enumerate(sessions_training.iterrows(), 1):
         try:
             trials_analyzed_path = utils.generate_trials_analyzed_path(data_folder, session_info)
-            if os.path.isfile(trials_analyzed_path) and not regenerate:
+            if os.path.isfile(trials_analyzed_path) and not regenerate_analysis:
                 skipped_count += 1
                 continue
             
@@ -110,7 +110,13 @@ def analyze_trials(sessions_training, data_folder, regenerate=False):
             trials = utils.load_data(utils.generate_trials_path(data_folder, session_info))
             trials_data = helper.get_trial_data_df(session_by_trial)
             trials_analyzed = pd.merge(trials, trials_data, on='session_trial_num')
-            trials_analyzed['group'] = session_info['group'] #assigning trial type manually
+            
+            # Add time since last reward calculation
+            events = utils.load_data(utils.generate_events_processed_path(data_folder, session_info))
+            trials_analyzed = helper.add_time_since_last_reward(trials_analyzed, events)
+            trials_analyzed = helper.add_cumulative_reward_metrics(trials_analyzed)
+            
+            trials_analyzed[['group', 'dir']] = session_info[['group', 'dir']].values
             trials_analyzed.to_csv(trials_analyzed_path)
             processed_count += 1
             
@@ -127,28 +133,18 @@ def analyze_trials(sessions_training, data_folder, regenerate=False):
     
     return problematic_sessions
 
-def main(test_mode=False, test_sessions=5, regenerate=False):
+def main(sessions_training, test_mode=False, test_sessions=5, regenerate_trials=False, regenerate_analysis=False):
     """Main function to run the combined session analysis pipeline."""
-    print(f"Data folder: {data_folder}")
-    if test_mode:
-        print(f"Test mode: ON ({test_sessions} sessions)")
-    if regenerate:
-        print("Regenerate mode: ON")
-    print()
-    
-    # Generate sessions for both periods
-    sessions_training = correct_sessions_training(data_folder)
-    
     # Apply test mode if requested
     if test_mode:
         sessions_training = sessions_training.head(test_sessions)
         print(f"Test mode: Processing only {len(sessions_training)} sessions")
+        print(sessions_training.to_string())
     else:
         print(f"Processing {len(sessions_training)} total sessions")
     
     # Generate trials
-    problematic_trials = process_trials_generation(sessions_training, data_folder, regenerate=regenerate)
-    
+    problematic_trials = batch_generate_trials(sessions_training, data_folder, regenerate_trials)
     if len(problematic_trials) > 0:
         print(f"Found {len(problematic_trials)} problematic sessions during trial generation")
         print(problematic_trials.to_string())
@@ -157,16 +153,30 @@ def main(test_mode=False, test_sessions=5, regenerate=False):
         print("All sessions processed successfully for trial generation")
     
     # Analyze trials
-    problematic_analysis = analyze_trials(sessions_training, data_folder, regenerate=regenerate)
-    
+    problematic_analysis = analyze_trials(sessions_training, data_folder, regenerate_analysis)
     if len(problematic_analysis) > 0:
         print(f"Found {len(problematic_analysis)} problematic sessions during trial analysis")
         print(problematic_analysis.to_string())
         return
     else:
         print("All sessions analyzed successfully")
-    
-    print("Session Analysis Pipeline Complete!")
+
+def stitch_all_trials(data_folder, sessions_training):
+    trials_list = []
+    for _, session_info in sessions_training.iterrows():
+        trials = utils.load_data(utils.generate_trials_analyzed_path(data_folder, session_info))
+        trials_list.append(trials)
+    trials_training = pd.concat(trials_list, ignore_index=True)
+    sessions_info_to_merge = sessions_training[['dir', 'mouse', 'date', 'time', 'avg_tw', 'session']]
+    trials_training_analyzed = trials_training.merge(sessions_info_to_merge, on='dir', how='left')
+    trials_training_analyzed.to_csv(os.path.join(data_folder, 'trials_training_analyzed.csv'))
+
 
 if __name__ == "__main__":
-    main(test_mode=False, test_sessions=200, regenerate=False)
+     
+    # sessions_training = correct_sessions_training(data_folder)
+    sessions_training = utils.load_session_log(data_folder, f'sessions_training_{exp}.csv')
+
+    # main(sessions_training, test_mode=False, test_sessions=20, regenerate_trials=False, regenerate_analysis=True)
+
+    stitch_all_trials(data_folder, sessions_training)

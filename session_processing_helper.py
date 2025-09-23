@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import utils
 import shutil
-
+import numpy as np
 
 with open('exp_cohort_info.json', 'r') as f:
     training_info = json.load(f)
@@ -460,11 +460,23 @@ def get_trial_wait_data(trial):
         'num_pump': len(consumption_data.loc[(consumption_data['key'] == 'pump') & (consumption_data['value'] == 1)])
     }
 
+def get_trial_lick_data(trial):
+    """Extract up to the first four lick times (in-trial time)."""
+    licks = trial.loc[trial['key'] == 'lick', 'trial_time'].reset_index(drop=True)
+    # Use np.nan for missing lick slots to keep numeric dtype when possible
+    return {
+        'first_lick': licks.iloc[0] if len(licks) > 0 else np.nan,
+        'second_lick': licks.iloc[1] if len(licks) > 1 else np.nan,
+        'third_lick': licks.iloc[2] if len(licks) > 2 else np.nan,
+        'fourth_lick': licks.iloc[3] if len(licks) > 3 else np.nan,
+    }
+
 def get_trial_performance(t, trial):
     """Get comprehensive trial performance combining background and wait data."""
     bg_data = get_trial_bg_data(trial)
     wait_data = get_trial_wait_data(trial)
-    trial_data = {'session_trial_num': t} | bg_data | wait_data
+    lick_data = get_trial_lick_data(trial)
+    trial_data = {'session_trial_num': t} | bg_data | wait_data | lick_data
     
     if (bg_data['num_bg_licks'] == 0) & (wait_data['miss_trial'] == False):
         trial_data['good_trial'] = True
@@ -478,8 +490,38 @@ def get_trial_data_df(session_by_trial):
     trial_data_list = []
     
     for t, trial in session_by_trial:
-        trial_data = get_trial_performance(t, trial)
+        # Ensure per-trial relative time exists for lick timing
+        trial_with_time = add_trial_time(trial)
+        trial_data = get_trial_performance(t, trial_with_time)
         trial_data_list.append(trial_data)
     
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
+
+def add_time_since_last_reward(trials, events):
+    """Add time since last 5μL reward column to trials dataframe."""    
+    # Filter for 5μL reward events
+    events_reward = events[(events['key'] == 'consumption') & (events['reward_size'] == 5)]
+    
+    def time_since_last_reward(row):
+        # Get all reward events that happened before this trial in the same block
+        prior_rewards = events_reward[
+            (events_reward['block_num'] == row['block_num']) & 
+            (events_reward['session_trial_num'] < row['session_trial_num'])
+        ]
+        if prior_rewards.empty:
+            return np.nan  # No prior rewards in this block
+        last_reward_time = prior_rewards['session_time'].max()
+        return row['start_time'] - last_reward_time
+    
+    trials['time_since_last_reward'] = trials.apply(time_since_last_reward, axis=1)
+    return trials
+
+def add_cumulative_reward_metrics(trials):
+    """Add cumulative reward and running reward rate columns to trials dataframe."""
+    trials = trials.sort_values('session_trial_num').reset_index(drop=True)
+    trials['cumulative_reward'] = trials['reward'].fillna(0).cumsum().shift(fill_value=0)
+    session_start_time = trials.iloc[0]['start_time']
+    trials['running_reward_rate'] = trials['cumulative_reward'] / (trials['start_time'] - session_start_time)
+    
+    return trials
