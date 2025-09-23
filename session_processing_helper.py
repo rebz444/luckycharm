@@ -366,7 +366,16 @@ def get_session_basics(session_df):
 
     num_blocks = last_trial.loc[(last_trial['key'] == 'trial') & (last_trial['value'] == 1), 'block_num'].iloc[0] + 1
     total_reward = round(session_df.reward_size.sum(), 2)
-    total_time = round((session_df.session_time.max() - session_df.session_time.min()), 2)
+    
+    # Calculate total time as sum of time per block
+    total_time = 0
+    for block_num in range(int(num_blocks)):
+        block_data = session_df[session_df['block_num'] == block_num]
+        if not block_data.empty:
+            block_time = block_data.session_time.max() - block_data.session_time.min()
+            total_time += block_time
+    
+    total_time = round(total_time, 2)
     
     session_basics = {
         'num_blocks': num_blocks,

@@ -174,9 +174,9 @@ def stitch_all_trials(data_folder, sessions_training):
 
 if __name__ == "__main__":
      
-    # sessions_training = correct_sessions_training(data_folder)
-    sessions_training = utils.load_session_log(data_folder, f'sessions_training_{exp}.csv')
+    sessions_training = correct_sessions_training(data_folder)
+    # sessions_training = utils.load_session_log(data_folder, f'sessions_training_{exp}.csv')
 
     # main(sessions_training, test_mode=False, test_sessions=20, regenerate_trials=False, regenerate_analysis=True)
 
-    stitch_all_trials(data_folder, sessions_training)
+    # stitch_all_trials(data_folder, sessions_training)
