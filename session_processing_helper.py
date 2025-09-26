@@ -532,5 +532,10 @@ def add_cumulative_reward_metrics(trials):
     trials['cumulative_reward'] = trials['reward'].fillna(0).cumsum().shift(fill_value=0)
     session_start_time = trials.iloc[0]['start_time']
     trials['running_reward_rate'] = trials['cumulative_reward'] / (trials['start_time'] - session_start_time)
-    
+    trials['previous_trial_reward_outcome'] = trials['reward'].shift(1).fillna(0)
     return trials
+
+def get_trial_reward_outcome(trials, events):
+    trials_reward_1 = add_time_since_last_reward(trials, events)
+    trials_reward_2 = add_cumulative_reward_metrics(trials_reward_1)
+    return trials_reward_2

@@ -1,5 +1,4 @@
 import os
-import shutil
 import pandas as pd
 import warnings
 
@@ -113,8 +112,7 @@ def analyze_trials(sessions_training, data_folder, regenerate_analysis=False):
             
             # Add time since last reward calculation
             events = utils.load_data(utils.generate_events_processed_path(data_folder, session_info))
-            trials_analyzed = helper.add_time_since_last_reward(trials_analyzed, events)
-            trials_analyzed = helper.add_cumulative_reward_metrics(trials_analyzed)
+            trials_analyzed = helper.get_trial_reward_outcome(trials_analyzed, events)
             
             trials_analyzed[['group', 'dir']] = session_info[['group', 'dir']].values
             trials_analyzed.to_csv(trials_analyzed_path)
@@ -173,10 +171,9 @@ def stitch_all_trials(data_folder, sessions_training):
 
 
 if __name__ == "__main__":
-     
     sessions_training = correct_sessions_training(data_folder)
-    # sessions_training = utils.load_session_log(data_folder, f'sessions_training_{exp}.csv')
 
-    # main(sessions_training, test_mode=False, test_sessions=20, regenerate_trials=False, regenerate_analysis=True)
+    # sessions_training = utils.load_session_log(data_folder, f'sessions_training_{exp}.csv')
+    # # main(sessions_training, test_mode=False, test_sessions=20, regenerate_trials=False, regenerate_analysis=True)
 
     # stitch_all_trials(data_folder, sessions_training)
