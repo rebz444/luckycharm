@@ -449,9 +449,6 @@ def get_trial_wait_data(trial):
     """Extract wait trial performance data."""
     wait_start = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'session_time']
     
-    # if wait_start.empty:
-    #     return {'miss_trial': True, 'time_waited': 0, 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
-    
     wait_start_time = wait_start.iloc[0]
     consumption_events = trial.loc[trial['key'] == 'consumption']
     
@@ -507,35 +504,113 @@ def get_trial_data_df(session_by_trial):
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
 
-def add_time_since_last_reward(trials, events):
-    """Add time since last 5μL reward column to trials dataframe."""    
-    # Filter for 5μL reward events
-    events_reward = events[(events['key'] == 'consumption') & (events['reward_size'] == 5)]
+def get_previous_trial_performance(trials, rolling_windows=[5, 10]):
+    """Add lagged trial features and rolling averages."""
+    trials = trials.copy()
     
-    def time_since_last_reward(row):
-        # Get all reward events that happened before this trial in the same block
-        prior_rewards = events_reward[
-            (events_reward['block_num'] == row['block_num']) & 
-            (events_reward['session_trial_num'] < row['session_trial_num'])
-        ]
-        if prior_rewards.empty:
-            return np.nan  # No prior rewards in this block
-        last_reward_time = prior_rewards['session_time'].max()
-        return row['start_time'] - last_reward_time
-    
-    trials['time_since_last_reward'] = trials.apply(time_since_last_reward, axis=1)
+    # Lagged features
+    lagged_columns = ['bg_repeats', 'time_waited', 'reward', 'miss_trial']
+    for col in lagged_columns:
+        if col in trials.columns:
+            trials[f'previous_trial_{col}'] = trials[col].shift(1).fillna(0)
+            
+    # Rolling averages
+    rolling_metrics = ['bg_repeats', 'time_waited']
+    for metric in rolling_metrics:
+        if metric in trials.columns:
+            for window in rolling_windows:
+                trials[f'{metric}_rolling_mean_{window}'] = (
+                    trials[metric].rolling(window=window, min_periods=1).mean().shift(1, fill_value=0)
+                )
     return trials
 
-def add_cumulative_reward_metrics(trials):
-    """Add cumulative reward and running reward rate columns to trials dataframe."""
-    trials = trials.sort_values('session_trial_num').reset_index(drop=True)
+def get_trial_progress(trials):
+    """Add trial progress features."""
+    trials = trials.copy()
+
+    trials['trial_fraction_in_session'] = (trials['session_trial_num'] + 1) / len(trials)
+    trials['trial_fraction_in_block'] = (
+        (trials['block_trial_num'] + 1) / 
+        trials['block_num'].map(trials['block_num'].value_counts())
+    )
+    trials['block_fraction_in_session'] = (trials['block_num'] + 1) / trials['block_num'].nunique()
+    
+    return trials
+
+def get_rewarded_streak(trials):
+    """Add rewarded and unrewarded streak features to trials dataframe."""
+    trials = trials.copy()
+    rewarded = trials['reward'].fillna(0) > 0
+    
+    # Rewarded streak (consecutive rewarded trials)
+    rewarded_streak = rewarded.groupby((~rewarded).cumsum()).cumsum()
+    trials['rewarded_streak'] = rewarded_streak.shift(1, fill_value=0)
+    
+    # Unrewarded streak (consecutive unrewarded trials)
+    unrewarded_streak = (~rewarded).groupby(rewarded.cumsum()).cumsum()
+    trials['unrewarded_streak'] = unrewarded_streak.shift(1, fill_value=0)
+    
+    return trials
+
+def get_block_reward_metrics(trials, events):
+    """
+    Add reward metrics within blocks to trials dataframe:
+    - Reward rate since block start
+    - Reward rates for past 1, 5, 10 minutes within block
+    - Time since last reward in block
+    - Cumulative reward in block
+    """
+    trials = trials.copy()
+    reward_events = events[
+        (events['key'] == 'consumption') & 
+        (events['reward_size'].notna()) & 
+        (events['reward_size'] > 0)
+    ]
+    time_windows = [60, 300, 600]  # seconds
+
+    # Initialize columns
+    trials['reward_rate_since_block_start'] = 0.0
+    trials['time_since_last_reward_in_block'] = np.nan
+    trials['cumulative_reward_in_block'] = 0.0
+    for w in time_windows:
+        trials[f'reward_rate_past_{w//60}min_in_block'] = 0.0
+
+    for block_num, block_trials in trials.groupby('block_num'):
+        block_start = block_trials['start_time'].min()
+        block_rewards = reward_events[
+            (reward_events['block_num'] == block_num) &
+            (reward_events['session_time'] >= block_start)
+        ].sort_values('session_time')
+        r_times = block_rewards['session_time'].values
+        r_sizes = block_rewards['reward_size'].values
+
+        for idx, row in block_trials.iterrows():
+            t = row['start_time']
+            mask = r_times < t
+            cum_rew = r_sizes[mask].sum()
+            trials.at[idx, 'cumulative_reward_in_block'] = cum_rew
+
+            elapsed = t - block_start
+            if elapsed > 0:
+                trials.at[idx, 'reward_rate_since_block_start'] = cum_rew / elapsed
+
+            if mask.any():
+                trials.at[idx, 'time_since_last_reward_in_block'] = t - r_times[mask].max()
+
+            for w in time_windows:
+                w_start = max(t - w, block_start)
+                mask_w = (r_times >= w_start) & (r_times < t)
+                w_rew = r_sizes[mask_w].sum()
+                actual_w = t - w_start
+                if actual_w > 0:
+                    trials.at[idx, f'reward_rate_past_{w//60}min_in_block'] = w_rew / actual_w
+    
     trials['cumulative_reward'] = trials['reward'].fillna(0).cumsum().shift(fill_value=0)
-    session_start_time = trials.iloc[0]['start_time']
-    trials['running_reward_rate'] = trials['cumulative_reward'] / (trials['start_time'] - session_start_time)
-    trials['previous_trial_reward_outcome'] = trials['reward'].shift(1).fillna(0)
     return trials
 
-def get_trial_reward_outcome(trials, events):
-    trials_reward_1 = add_time_since_last_reward(trials, events)
-    trials_reward_2 = add_cumulative_reward_metrics(trials_reward_1)
-    return trials_reward_2
+def get_trial_features(trials_analyzed, events):
+    trials_with_performance = get_previous_trial_performance(trials_analyzed)
+    trials_with_progress = get_trial_progress(trials_with_performance)
+    trials_with_streak = get_rewarded_streak(trials_with_progress)
+    trials_with_block_reward_metrics = get_block_reward_metrics(trials_with_streak, events)
+    return trials_with_block_reward_metrics
