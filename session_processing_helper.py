@@ -37,6 +37,12 @@ def check_session_files(data_folder):
             'meta_empty': not meta_files or all(f.stat().st_size == 0 for f in meta_files)
         })
 
+    if not files_check:
+        empty_df = pd.DataFrame(
+            columns=["dir", "events", "meta", "events_empty", "meta_empty"]
+        )
+        return empty_df, empty_df, empty_df, empty_df
+
     files_check_df = pd.DataFrame(files_check).sort_values("dir")
     
     return (
@@ -447,7 +453,7 @@ def get_trial_bg_data(trial):
 
 def get_trial_wait_data(trial):
     """Extract wait trial performance data."""
-    wait_start = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'session_time']
+    wait_start = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'trial_time']
     
     wait_start_time = wait_start.iloc[0]
     consumption_events = trial.loc[trial['key'] == 'consumption']
@@ -455,12 +461,13 @@ def get_trial_wait_data(trial):
     if consumption_events.empty:
         return {'miss_trial': True, 'time_waited': 60, 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
     
-    consumption_start = consumption_events.iloc[0]['session_time']
+    consumption_start = consumption_events.iloc[0]['trial_time']
     consumption_data = trial.loc[trial['state'] == 'in_consumption']
     
     return {
         'miss_trial': False,
         'time_waited': consumption_start - wait_start_time,
+        'time_waited_since_cue_on': consumption_start,
         'reward': consumption_events.iloc[0]['reward_size'],
         'num_consumption_lick': len(consumption_data.loc[(consumption_data['key'] == 'lick') & (consumption_data['value'] == 1)]),
         'num_pump': len(consumption_data.loc[(consumption_data['key'] == 'pump') & (consumption_data['value'] == 1)])
@@ -468,19 +475,17 @@ def get_trial_wait_data(trial):
 
 def get_trial_lick_data(trial):
     """Extract up to the first four lick times (in-trial time)."""
-    licks = trial.loc[trial['key'] == 'lick', 'trial_time'].reset_index(drop=True)
-    # Use np.nan for missing lick slots to keep numeric dtype when possible
+    licks = trial.loc[(trial['key'] == 'lick') & (trial['value'] == 1), 'trial_time'].reset_index(drop=True)
     return {
         'first_lick': licks.iloc[0] if len(licks) > 0 else np.nan,
-        'second_lick': licks.iloc[1] if len(licks) > 1 else np.nan,
-        'third_lick': licks.iloc[2] if len(licks) > 2 else np.nan,
-        'fourth_lick': licks.iloc[3] if len(licks) > 3 else np.nan,
+        'last_lick': licks.iloc[-1] if len(licks) > 0 else np.nan
     }
 
 def get_trial_performance(t, trial):
     """Get comprehensive trial performance combining background and wait data."""
     bg_data = get_trial_bg_data(trial)
     wait_data = get_trial_wait_data(trial)
+    
     lick_data = get_trial_lick_data(trial)
     trial_data = {'session_trial_num': t} | bg_data | wait_data | lick_data
     
@@ -504,18 +509,51 @@ def get_trial_data_df(session_by_trial):
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
 
+def get_time_since_last_lick(trials_data, events):
+    """
+    Add time_waited_since_last_lick column to trials_data.
+    For each trial, calculates the time between the last lick before the decision lick
+    and the decision lick itself.
+    """
+    trials_data = trials_data.copy()
+    
+    # Get all licks sorted by session_time
+    all_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)].sort_values('session_time').reset_index(drop=True)
+    
+    # Get decision licks (last one per trial)
+    decision_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1) & (events['state'] == 'in_wait')]
+    last_decision_per_trial = decision_licks.groupby('session_trial_num').tail(1)
+    
+    # For each decision lick, find time since previous lick using searchsorted
+    def get_time_since_prev_lick(row):
+        idx = all_licks['session_time'].searchsorted(row['session_time'])
+        if idx <= 0:
+            return np.nan
+        return row['session_time'] - all_licks.iloc[idx - 1]['session_time']
+    
+    time_map = last_decision_per_trial.apply(get_time_since_prev_lick, axis=1)
+    time_map.index = last_decision_per_trial['session_trial_num']
+    
+    trials_data['time_waited_since_last_lick'] = trials_data['session_trial_num'].map(time_map)
+    return trials_data
+
 def get_previous_trial_performance(trials, rolling_windows=[5, 10]):
     """Add lagged trial features and rolling averages."""
     trials = trials.copy()
     
     # Lagged features
-    lagged_columns = ['bg_repeats', 'time_waited', 'reward', 'miss_trial']
+    lagged_columns = ['bg_drawn', 'bg_length', 'bg_repeats', 'num_bg_licks','first_lick', 'last_lick',
+                      'time_waited', 'time_waited_since_cue_on','time_waited_since_last_lick',
+                      'reward', 'num_consumption_lick', 'miss_trial']
     for col in lagged_columns:
         if col in trials.columns:
-            trials[f'previous_trial_{col}'] = trials[col].shift(1).fillna(0)
+            fill_value = False if col == 'miss_trial' else 0
+            trials[f'previous_trial_{col}'] = trials[col].shift(1).fillna(fill_value)
             
     # Rolling averages
-    rolling_metrics = ['bg_repeats', 'time_waited']
+    rolling_metrics = ['bg_length', 'bg_repeats', 'num_bg_licks', 'first_lick', 'last_lick',
+                       'time_waited', 'time_waited_since_cue_on', 'time_waited_since_last_lick',
+                       'reward', 'num_consumption_lick']
     for metric in rolling_metrics:
         if metric in trials.columns:
             for window in rolling_windows:
@@ -609,7 +647,8 @@ def get_block_reward_metrics(trials, events):
     return trials
 
 def get_trial_features(trials_analyzed, events):
-    trials_with_performance = get_previous_trial_performance(trials_analyzed)
+    trials_with_time_since_last_lick = get_time_since_last_lick(trials_analyzed, events)
+    trials_with_performance = get_previous_trial_performance(trials_with_time_since_last_lick)
     trials_with_progress = get_trial_progress(trials_with_performance)
     trials_with_streak = get_rewarded_streak(trials_with_progress)
     trials_with_block_reward_metrics = get_block_reward_metrics(trials_with_streak, events)

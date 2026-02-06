@@ -103,7 +103,5 @@ def main(auto_delete=False):
     print("\nSession quality control completed!\n")
 
 if __name__ == "__main__":
-    import sys
-    # Check if auto delete mode is enabled via command line argument
     auto_delete = True
     main(auto_delete)
