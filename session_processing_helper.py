@@ -437,21 +437,41 @@ def generate_trials(session_info, events):
     trials = pd.DataFrame(trial_info_list)
     return trials
 
-def get_trial_bg_data(trial):
-    """Extract background trial metrics."""
-    bg_time = trial.loc[(trial['key'] == 'background') & (trial['value'] == 1), 'session_time'].iloc[0]
-    wait_time = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'session_time'].iloc[0]
+def get_trial_bg_data(trial_events):
+    """Extract background period metrics from trial events."""
+    # Get background period start/end times
+    bg_time = trial_events.loc[(trial_events['key'] == 'background') & (trial_events['value'] == 1), 'session_time'].iloc[0]
+    wait_time = trial_events.loc[(trial_events['key'] == 'wait') & (trial_events['value'] == 1), 'session_time'].iloc[0]
     
-    bg_events = trial.loc[trial.state == 'in_background']
+    bg_events = trial_events.loc[trial_events.state == 'in_background'].copy()
+    bg_drawn = float(bg_events.iloc[0]['time_bg']) if not bg_events.empty else 0
+    bg_length = wait_time - bg_time
+    bg_repeats = trial_events['key'].value_counts().get('background', 0)
+    
+    # Extract background licks
+    bg_licks = bg_events.loc[(bg_events['key'] == 'lick') & (bg_events['value'] == 1)]
+    
+    # Calculate lick rate (handle division by zero)
+    bg_repeat_rate = len(bg_licks) / bg_length if bg_length > 0 else 0
+    
+    # Calculate mean phase of licks relative to bg_drawn interval
+    if len(bg_licks) > 0 and bg_drawn > 0:
+        intervals = np.diff(bg_licks['trial_time'], prepend=0)
+        proportions = intervals / bg_drawn
+        mean_bg_lick_phase = proportions.mean()
+    else:
+        mean_bg_lick_phase = np.nan
     
     return {
-        'bg_drawn': float(bg_events.iloc[0]['time_bg']) if not bg_events.empty else 0,
-        'bg_length': wait_time - bg_time,
-        'bg_repeats': trial['key'].value_counts().get('background', 0),
-        'num_bg_licks': len(bg_events.loc[(bg_events['key'] == 'lick') & (bg_events['value'] == 1)])
+        'bg_drawn': bg_drawn,
+        'bg_length': bg_length,
+        'bg_repeats': bg_repeats,
+        'num_bg_licks': len(bg_licks),
+        'bg_repeat_rate': bg_repeat_rate,
+        'mean_bg_lick_phase': mean_bg_lick_phase
     }
 
-def get_trial_wait_data(trial):
+def get_trial_wait_data(trial, bg_data):
     """Extract wait trial performance data."""
     wait_start = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'trial_time']
     
@@ -459,7 +479,8 @@ def get_trial_wait_data(trial):
     consumption_events = trial.loc[trial['key'] == 'consumption']
     
     if consumption_events.empty:
-        return {'miss_trial': True, 'time_waited': 60, 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
+        return {'miss_trial': True, 'time_waited': 60, 'time_waited_since_cue_on': bg_data['bg_length'] + 60,
+                'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
     
     consumption_start = consumption_events.iloc[0]['trial_time']
     consumption_data = trial.loc[trial['state'] == 'in_consumption']
@@ -484,7 +505,7 @@ def get_trial_lick_data(trial):
 def get_trial_performance(t, trial):
     """Get comprehensive trial performance combining background and wait data."""
     bg_data = get_trial_bg_data(trial)
-    wait_data = get_trial_wait_data(trial)
+    wait_data = get_trial_wait_data(trial, bg_data)
     
     lick_data = get_trial_lick_data(trial)
     trial_data = {'session_trial_num': t} | bg_data | wait_data | lick_data
@@ -509,33 +530,38 @@ def get_trial_data_df(session_by_trial):
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
 
-def get_time_since_last_lick(trials_data, events):
-    """
-    Add time_waited_since_last_lick column to trials_data.
-    For each trial, calculates the time between the last lick before the decision lick
-    and the decision lick itself.
-    """
-    trials_data = trials_data.copy()
+def get_time_since_last_lick(trials, events):
+    """Calculate time since the previous lick for each trial."""
+    time_map = {}
+    all_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)].copy().reset_index(drop=True)
+    decision_licks = all_licks.loc[all_licks['state'] == 'in_wait']
     
-    # Get all licks sorted by session_time
-    all_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)].sort_values('session_time').reset_index(drop=True)
+    # For trials WITH decision licks: time since previous lick
+    for _, row in decision_licks.iterrows():
+        trial_num = row['session_trial_num']
+        lick_idx = all_licks['session_time'].searchsorted(row['session_time'])
+        if lick_idx > 0:
+            time_map[trial_num] = row['session_time'] - all_licks.iloc[lick_idx - 1]['session_time']
+        else:
+            time_map[trial_num] = np.nan
     
-    # Get decision licks (last one per trial)
-    decision_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1) & (events['state'] == 'in_wait')]
-    last_decision_per_trial = decision_licks.groupby('session_trial_num').tail(1)
+    # For trials WITHOUT decision licks: time from last block lick to trial end
+    all_trial_nums = trials.session_trial_num.unique()
+    decision_lick_trials = decision_licks['session_trial_num'].dropna().unique()
+    trials_no_decision_licks = np.setdiff1d(all_trial_nums, decision_lick_trials)
+
+    for t in trials_no_decision_licks:
+        trial_row = trials.loc[trials['session_trial_num'] == t].iloc[0]
+        prior_licks = all_licks.loc[(all_licks['block_num'] == trial_row['block_num']) 
+                                    & (all_licks['session_time'] < trial_row['end_time'])]
+        if not prior_licks.empty:
+            last_lick_time = prior_licks['session_time'].max()
+            time_map[int(t)] = trial_row['end_time'] - last_lick_time
+        else:
+            time_map[int(t)] = np.nan
     
-    # For each decision lick, find time since previous lick using searchsorted
-    def get_time_since_prev_lick(row):
-        idx = all_licks['session_time'].searchsorted(row['session_time'])
-        if idx <= 0:
-            return np.nan
-        return row['session_time'] - all_licks.iloc[idx - 1]['session_time']
-    
-    time_map = last_decision_per_trial.apply(get_time_since_prev_lick, axis=1)
-    time_map.index = last_decision_per_trial['session_trial_num']
-    
-    trials_data['time_waited_since_last_lick'] = trials_data['session_trial_num'].map(time_map)
-    return trials_data
+    trials['time_waited_since_last_lick'] = trials['session_trial_num'].map(time_map)
+    return trials
 
 def get_previous_trial_performance(trials, rolling_windows=[5, 10]):
     """Add lagged trial features and rolling averages."""
