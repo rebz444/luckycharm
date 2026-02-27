@@ -1,268 +1,15 @@
 import json
 import os
+
+import numpy as np
 import pandas as pd
 import utils
-import shutil
-import numpy as np
 
 with open('exp_cohort_info.json', 'r') as f:
     training_info = json.load(f)
 cohort_info = training_info['cohorts']
 
 meta_change_date = '2024-04-16'
-
-# =============================================================================
-# QUALITY CONTROL FUNCTIONS
-# =============================================================================
-
-def check_session_files(data_folder):
-    """Check session folders for required files and their status."""
-    files_check = []
-    
-    for entry in os.scandir(data_folder):
-        if not entry.is_dir():
-            continue
-            
-        session_path = os.path.join(data_folder, entry.name)
-        files = [f for f in os.scandir(session_path) if f.is_file() and not f.name.startswith('.')]
-        
-        events_files = [f for f in files if f.name.startswith("events_")]
-        meta_files = [f for f in files if f.name.startswith("meta_")]
-        
-        files_check.append({
-            'dir': entry.name,
-            'events': bool(events_files),
-            'meta': bool(meta_files),
-            'events_empty': not events_files or all(f.stat().st_size == 0 for f in events_files),
-            'meta_empty': not meta_files or all(f.stat().st_size == 0 for f in meta_files)
-        })
-
-    if not files_check:
-        empty_df = pd.DataFrame(
-            columns=["dir", "events", "meta", "events_empty", "meta_empty"]
-        )
-        return empty_df, empty_df, empty_df, empty_df
-
-    files_check_df = pd.DataFrame(files_check).sort_values("dir")
-    
-    return (
-        files_check_df[files_check_df.meta == False],
-        files_check_df[files_check_df.events == False],
-        files_check_df[(files_check_df.meta == True) & (files_check_df.meta_empty == True)],
-        files_check_df[(files_check_df.events == True) & (files_check_df.events_empty == True)]
-    )
-
-def backup_directory(source_path):
-    """Create backup or update existing with new sessions."""
-    backup_path = source_path + "_backup"
-    
-    if not os.path.exists(backup_path):
-        try:
-            shutil.copytree(source_path, backup_path)
-            print(f"Backup created at {backup_path}")
-            return backup_path
-        except Exception as e:
-            print(f"Error creating backup: {e}")
-            return None
-    else:
-        # Update existing backup with new sessions
-        print(f"Backup exists at {backup_path}, checking for new sessions...")
-        new_sessions = []
-        
-        for item in os.listdir(source_path):
-            source_item = os.path.join(source_path, item)
-            backup_item = os.path.join(backup_path, item)
-            
-            # Skip if this is the backup directory itself
-            if item.endswith('_backup'):
-                continue
-                
-            if os.path.isdir(source_item) and not os.path.exists(backup_item):
-                try:
-                    shutil.copytree(source_item, backup_item)
-                    new_sessions.append(item)
-                    print(f"Added to backup: {item}")
-                except Exception as e:
-                    print(f"Error copying {item} to backup: {e}")
-        
-        if new_sessions:
-            print(f"Updated backup with {len(new_sessions)} new sessions")
-        else:
-            print("Backup is up-to-date")
-        
-        return backup_path
-
-def identify_test_folders(data_dir):
-    """Identify all folders ending with '_test'."""
-    return [os.path.join(data_dir, item) for item in os.listdir(data_dir) 
-            if os.path.isdir(os.path.join(data_dir, item)) and item.endswith('_test')]
-
-def identify_problematic_sessions(data_folder):
-    """Identify sessions with missing or empty files."""
-    missing_meta, missing_events, empty_meta, empty_events = check_session_files(data_folder)
-    
-    problematic_sessions = pd.concat([
-        missing_meta[['dir']].assign(reason='Missing meta file'),
-        missing_events[['dir']].assign(reason='Missing events file'),
-        empty_meta[['dir']].assign(reason='Empty meta file'),
-        empty_events[['dir']].assign(reason='Empty events file')
-    ]).reset_index(drop=True)
-    
-    return problematic_sessions
-
-def identify_short_or_crashed_sessions(data_folder, short_threshold=20):
-    """Identify short or crashed sessions by reading events files."""
-    short_sessions, crashed_sessions = [], []
-    
-    for session_dir in [entry.name for entry in os.scandir(data_folder) if entry.is_dir()]:
-        try:
-            events_files = [f for f in os.listdir(os.path.join(data_folder, session_dir)) 
-                           if f.startswith('events_') and f.endswith('.txt')]
-            
-            if not events_files:
-                short_sessions.append({'dir': session_dir, 'total_trials': 'No events file', 'reason': 'Missing events file'})
-                continue
-                
-            events = pd.read_csv(os.path.join(data_folder, session_dir, events_files[0]), low_memory=False)
-            
-            # Check for short sessions
-            max_trial_num = events['session_trial_num'].max()
-            total_trials = max_trial_num + 1 if pd.notna(max_trial_num) else 0
-            if pd.isna(total_trials) or total_trials < short_threshold:
-                short_sessions.append({'dir': session_dir, 'total_trials': total_trials, 'reason': 'Short'})
-            
-            # Check for crashed sessions
-            session_end = events.loc[(events['key'] == 'session') & (events['value'] == 0)]
-            if len(session_end) != 1:
-                crashed_sessions.append({'dir': session_dir, 'reason': 'Crashed'})
-                
-        except Exception as e:
-            short_sessions.append({'dir': session_dir, 'total_trials': 'Error', 'reason': f'Cannot read file: {str(e)}'})
-    
-    all_problematic = short_sessions + crashed_sessions
-    if not all_problematic:
-        return pd.DataFrame()
-    
-    # Remove duplicates and combine reasons
-    unique_sessions = {}
-    for session in all_problematic:
-        if session['dir'] not in unique_sessions:
-            unique_sessions[session['dir']] = session
-        else:
-            unique_sessions[session['dir']]['reason'] = f"{unique_sessions[session['dir']]['reason']}; {session['reason']}"
-    
-    return pd.DataFrame(list(unique_sessions.values()))
-
-def validate_session_directory_names(data_folder):
-    """Check if meta JSON files match their directory names."""
-    mismatched_sessions = []
-    
-    for root, _, files in os.walk(data_folder):
-        for file in files: 
-            if file.startswith("meta_") and file.endswith(".json"):
-                try:
-                    with open(os.path.join(root, file)) as f:
-                        session_data = json.load(f)
-                    
-                    # Get config data based on date
-                    date_str = file.split('_')[1]
-                    config_data = session_data.get('session_config', session_data) if date_str >= '2024-04-16' else session_data
-                    
-                    # Check if metadata matches directory name
-                    meta_dir = f"{config_data['date']}_{config_data['time']}_{config_data['mouse']}"
-                    if meta_dir != os.path.basename(root):
-                        mismatched_sessions.append({
-                            'actual_dir': os.path.basename(root),
-                            'meta_dir': meta_dir,
-                            **config_data
-                        })
-                        
-                except Exception as e:
-                    print(f"Error processing file {file}: {e}")
-
-    return pd.DataFrame(mismatched_sessions).sort_values('meta_dir') if mismatched_sessions else pd.DataFrame()
-
-def delete_sessions(sessions_df, data_folder, session_type="sessions", auto_delete=False):
-    """Delete sessions from the filesystem and return deletion record."""
-    if sessions_df.empty:
-        print(f"No {session_type} found to delete")
-        return pd.DataFrame()
-    
-    print(f"Found {len(sessions_df)} {session_type} to delete:")
-    print(sessions_df.to_string(index=False))
-    
-    if auto_delete or input(f"\nProceed with deletion of {session_type}? (y/N): ").lower() == 'y':
-        deletion_record = []
-        for _, row in sessions_df.iterrows():
-            session_dir = os.path.join(data_folder, row['dir'])
-            if os.path.exists(session_dir):
-                try:
-                    shutil.rmtree(session_dir)
-                    deletion_record.append({
-                        'session': row['dir'], 
-                        'reason': row.get('reason', f'Deleted {session_type}'),
-                        'deleted': True, 
-                        'timestamp': pd.Timestamp.now()
-                    })
-                    print(f"Deleted: {row['dir']}")
-                except Exception as e:
-                    print(f"Error deleting {row['dir']}: {e}")
-        
-        print(f"Total {session_type} deleted: {len(deletion_record)}")
-        return pd.DataFrame(deletion_record)
-    else:
-        print("Deletion cancelled")
-        return pd.DataFrame()
-
-def sort_sessions_by_experiments(data_dir, exp_info):
-    """Sort sessions into experiment folders based on mouse names."""
-    # Get the parent directory of raw folder (behavior_data)
-    parent_dir = os.path.dirname(data_dir)
-    exp_folders = {exp_name: os.path.join(parent_dir, exp_name) for exp_name in exp_info.keys()}
-    
-    for exp_path in exp_folders.values():
-        os.makedirs(exp_path, exist_ok=True)
-        print(f"Created experiment folder: {exp_path}")
-    
-    moved_count = 0
-    for item in os.listdir(data_dir):
-        item_path = os.path.join(data_dir, item)
-        if not os.path.isdir(item_path) or item in exp_info.keys():
-            continue
-        
-        if len(item.split('_')) == 3:
-            _, _, mouse_name = item.split('_')
-            for exp_name, mice in exp_info.items():
-                if mouse_name in mice:
-                    try:
-                        shutil.move(item_path, os.path.join(exp_folders[exp_name], item))
-                        moved_count += 1
-                        print(f"Moved {item} to {exp_name}")
-                        break
-                    except Exception as e:
-                        print(f"Error moving {item}: {e}")
-            else:
-                print(f"No matching experiment found for {item}")
-    
-    print(f"Total sessions moved: {moved_count}")
-    return moved_count
-
-def update_deletion_record(data_dir, deletion_dfs):
-    """Update deletion record CSV file, appending to existing or creating new."""
-    deletion_csv_path = os.path.join(data_dir, 'deletion_record.csv')
-    all_deletions = [df for df in deletion_dfs if not df.empty]
-    
-    if all_deletions:
-        combined_df = pd.concat(all_deletions, ignore_index=True)
-        if os.path.exists(deletion_csv_path):
-            existing_df = pd.read_csv(deletion_csv_path)
-            pd.concat([existing_df, combined_df], ignore_index=True).to_csv(deletion_csv_path, index=False)
-            print(f"Appended to existing: {deletion_csv_path}")
-        else:
-            combined_df.to_csv(deletion_csv_path, index=False)
-            print(f"Created new: {deletion_csv_path}")
-    else:
-        print("No deletions to record")
 
 # =============================================================================
 # SESSION LOG GENERATION FUNCTIONS
@@ -283,7 +30,7 @@ def modify_total_trial(row):
     ending_code = row['ending_code']
     if pd.isna(ending_code):
         return row['total_trial']
-    
+
     ending_code = str(ending_code).lower()
     if ending_code == 'pygame' or ending_code == 'manual':
         return row['total_trial'] - 1
@@ -295,9 +42,9 @@ def modify_total_trial(row):
 def generate_sessions_all(data_folder):
     """Generate DataFrame from session metadata JSON files."""
     data = []
-    
+
     for root, _, files in os.walk(data_folder):
-        for file in files: 
+        for file in files:
             if file.startswith("meta_") and file.endswith(".json"):
                 path = os.path.join(root, file)
                 try:
@@ -309,7 +56,7 @@ def generate_sessions_all(data_folder):
                         data.append(session_data)
                     else:
                         data.append(session_data.get('session_config', session_data))
-                        
+
                 except Exception as e:
                     print(f"Error processing file {file}: {e}")
 
@@ -340,11 +87,11 @@ def generate_session_logs(data_folder, save_logs=True):
     sessions_all = generate_sessions_all(data_folder)
     sessions_training = generate_sessions_training(sessions_all)
     print(f"{len(sessions_training)} sessions in total")
-    
+
     if save_logs:
         utils.save_as_csv(df=sessions_all, folder=data_folder, filename='sessions_all.csv')
         utils.save_as_csv(df=sessions_training, folder=data_folder, filename='sessions_training.csv')
-    
+
     return sessions_all, sessions_training
 
 # =============================================================================
@@ -367,12 +114,12 @@ def add_trial_time(trial):
 
 def get_session_basics(session_df):
     """Extract basic session statistics (blocks, trials, rewards, time)."""
-    num_trials = session_df.session_trial_num.max() 
+    num_trials = session_df.session_trial_num.max()
     last_trial = session_df.loc[session_df['session_trial_num'] == num_trials]
 
     num_blocks = last_trial.loc[(last_trial['key'] == 'trial') & (last_trial['value'] == 1), 'block_num'].iloc[0] + 1
     total_reward = round(session_df.reward_size.sum(), 2)
-    
+
     # Calculate total time as sum of time per block
     total_time = 0
     for block_num in range(int(num_blocks)):
@@ -380,9 +127,9 @@ def get_session_basics(session_df):
         if not block_data.empty:
             block_time = block_data.session_time.max() - block_data.session_time.min()
             total_time += block_time
-    
+
     total_time = round(total_time, 2)
-    
+
     session_basics = {
         'num_blocks': num_blocks,
         'num_trials': num_trials + 1,
@@ -397,7 +144,7 @@ def stitch_sessions(session_1, session_2):
     time_offset = session_1_basics['session_time']
     block_offset = session_1_basics['num_blocks']
     trial_offset = session_1_basics['num_trials']
-    
+
     session_2.session_time = session_2.session_time + time_offset
     session_2.block_num = session_2.block_num + block_offset
     session_2.session_trial_num = session_2.session_trial_num + trial_offset
@@ -426,14 +173,14 @@ def get_trial_basics(trial):
 def generate_trials(session_info, events):
     """Generate trial information DataFrame from session events."""
     trial_info_list = []
-    
+
     num_trials = int(session_info.num_trials)
     for t in range(num_trials):
         trial = events.loc[events['session_trial_num'] == t]
         if not trial.empty:
             trial_basics = get_trial_basics(trial)
             trial_info_list.append(trial_basics)
-    
+
     trials = pd.DataFrame(trial_info_list)
     return trials
 
@@ -442,18 +189,18 @@ def get_trial_bg_data(trial_events):
     # Get background period start/end times
     bg_time = trial_events.loc[(trial_events['key'] == 'background') & (trial_events['value'] == 1), 'session_time'].iloc[0]
     wait_time = trial_events.loc[(trial_events['key'] == 'wait') & (trial_events['value'] == 1), 'session_time'].iloc[0]
-    
+
     bg_events = trial_events.loc[trial_events.state == 'in_background'].copy()
     bg_drawn = float(bg_events.iloc[0]['time_bg']) if not bg_events.empty else 0
     bg_length = wait_time - bg_time
     bg_repeats = trial_events['key'].value_counts().get('background', 0)
-    
+
     # Extract background licks
     bg_licks = bg_events.loc[(bg_events['key'] == 'lick') & (bg_events['value'] == 1)]
-    
+
     # Calculate lick rate (handle division by zero)
     bg_repeat_rate = len(bg_licks) / bg_length if bg_length > 0 else 0
-    
+
     # Calculate mean phase of licks relative to bg_drawn interval
     if len(bg_licks) > 0 and bg_drawn > 0:
         intervals = np.diff(bg_licks['trial_time'], prepend=0)
@@ -461,7 +208,7 @@ def get_trial_bg_data(trial_events):
         mean_bg_lick_phase = proportions.mean()
     else:
         mean_bg_lick_phase = np.nan
-    
+
     return {
         'bg_drawn': bg_drawn,
         'bg_length': bg_length,
@@ -474,17 +221,17 @@ def get_trial_bg_data(trial_events):
 def get_trial_wait_data(trial, bg_data):
     """Extract wait trial performance data."""
     wait_start = trial.loc[(trial['key'] == 'wait') & (trial['value'] == 1), 'trial_time']
-    
+
     wait_start_time = wait_start.iloc[0]
     consumption_events = trial.loc[trial['key'] == 'consumption']
-    
+
     if consumption_events.empty:
         return {'miss_trial': True, 'time_waited': 60, 'time_waited_since_cue_on': bg_data['bg_length'] + 60,
                 'reward': 0, 'num_consumption_lick': 0, 'num_pump': 0}
-    
+
     consumption_start = consumption_events.iloc[0]['trial_time']
     consumption_data = trial.loc[trial['state'] == 'in_consumption']
-    
+
     return {
         'miss_trial': False,
         'time_waited': consumption_start - wait_start_time,
@@ -506,79 +253,104 @@ def get_trial_performance(t, trial):
     """Get comprehensive trial performance combining background and wait data."""
     bg_data = get_trial_bg_data(trial)
     wait_data = get_trial_wait_data(trial, bg_data)
-    
+
     lick_data = get_trial_lick_data(trial)
     trial_data = {'session_trial_num': t} | bg_data | wait_data | lick_data
-    
+
     if (bg_data['num_bg_licks'] == 0) & (wait_data['miss_trial'] == False):
         trial_data['good_trial'] = True
     else:
-        trial_data['good_trial'] = False  
-    
+        trial_data['good_trial'] = False
+
     return trial_data
 
 def get_trial_data_df(session_by_trial):
     """Generate performance DataFrame for all trials in a session."""
     trial_data_list = []
-    
+
     for t, trial in session_by_trial:
         # Ensure per-trial relative time exists for lick timing
         trial_with_time = add_trial_time(trial)
         trial_data = get_trial_performance(t, trial_with_time)
         trial_data_list.append(trial_data)
-    
+
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
 
+def _compute_time_since_anchor(trials, events, anchor_times_session, anchor_times_by_block, col_name):
+    """
+    For each trial, compute time from the most recent anchor event to the decision lick
+    (hit trials) or trial end (miss trials).
+
+    anchor_times_session  : sorted np.array of all anchor event times in the session
+    anchor_times_by_block : dict {block_num: sorted np.array of anchor times}
+    col_name              : output column name
+    """
+    time_map = {}
+    decision_licks = events.loc[
+        (events['key'] == 'lick') & (events['value'] == 1) & (events['state'] == 'in_wait')
+    ]
+    first_decision_licks = decision_licks.groupby('session_trial_num')['session_time'].min()
+
+    # Hit trials: O(log n) searchsorted instead of O(n) boolean scan
+    for trial_num, dt in first_decision_licks.items():
+        pos = np.searchsorted(anchor_times_session, dt, side='left')
+        time_map[trial_num] = float(dt - anchor_times_session[pos - 1]) if pos > 0 else np.nan
+
+    # Miss trials: O(1) trial lookup via pre-indexed DataFrame
+    trial_lookup = trials.set_index('session_trial_num')
+    for t in np.setdiff1d(trials.session_trial_num.unique(), first_decision_licks.index.values):
+        row = trial_lookup.loc[t]
+        block_times = anchor_times_by_block.get(int(row['block_num']), np.array([]))
+        pos = np.searchsorted(block_times, row['end_time'], side='left')
+        time_map[int(t)] = float(row['end_time'] - block_times[pos - 1]) if pos > 0 else np.nan
+
+    trials[col_name] = trials['session_trial_num'].map(time_map)
+    return trials
+
 def get_time_since_last_lick(trials, events):
     """Calculate time since the previous lick for each trial."""
-    time_map = {}
-    all_licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)].copy().reset_index(drop=True)
-    decision_licks = all_licks.loc[all_licks['state'] == 'in_wait']
-    
-    # For trials WITH decision licks: time since previous lick
-    for _, row in decision_licks.iterrows():
-        trial_num = row['session_trial_num']
-        lick_idx = all_licks['session_time'].searchsorted(row['session_time'])
-        if lick_idx > 0:
-            time_map[trial_num] = row['session_time'] - all_licks.iloc[lick_idx - 1]['session_time']
-        else:
-            time_map[trial_num] = np.nan
-    
-    # For trials WITHOUT decision licks: time from last block lick to trial end
-    all_trial_nums = trials.session_trial_num.unique()
-    decision_lick_trials = decision_licks['session_trial_num'].dropna().unique()
-    trials_no_decision_licks = np.setdiff1d(all_trial_nums, decision_lick_trials)
+    licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)]
+    all_times = np.sort(licks['session_time'].values)
+    by_block = {b: np.sort(g['session_time'].values) for b, g in licks.groupby('block_num')}
+    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_lick')
 
-    for t in trials_no_decision_licks:
-        trial_row = trials.loc[trials['session_trial_num'] == t].iloc[0]
-        prior_licks = all_licks.loc[(all_licks['block_num'] == trial_row['block_num']) 
-                                    & (all_licks['session_time'] < trial_row['end_time'])]
-        if not prior_licks.empty:
-            last_lick_time = prior_licks['session_time'].max()
-            time_map[int(t)] = trial_row['end_time'] - last_lick_time
-        else:
-            time_map[int(t)] = np.nan
-    
-    trials['time_waited_since_last_lick'] = trials['session_trial_num'].map(time_map)
-    return trials
+def get_time_since_last_lick_bout(trials, events, session_bouts):
+    """Calculate time since the end of the previous lick bout for each trial."""
+    if session_bouts is None or session_bouts.empty:
+        trials['time_waited_since_last_lick_bout'] = np.nan
+        return trials
+    all_times = np.sort(session_bouts['bout_offset'].values)
+    by_block = {b: np.sort(g['bout_offset'].values) for b, g in session_bouts.groupby('block_num')}
+    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_lick_bout')
+
+def get_time_since_last_reward(trials, events):
+    """Calculate time since the last reward for each trial."""
+    rewards = events.loc[
+        (events['key'] == 'consumption') & (events['reward_size'].notna()) & (events['reward_size'] > 0)
+    ]
+    all_times = np.sort(rewards['session_time'].values)
+    by_block = {b: np.sort(g['session_time'].values) for b, g in rewards.groupby('block_num')}
+    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_reward')
 
 def get_previous_trial_performance(trials, rolling_windows=[5, 10]):
     """Add lagged trial features and rolling averages."""
     trials = trials.copy()
-    
+
     # Lagged features
-    lagged_columns = ['bg_drawn', 'bg_length', 'bg_repeats', 'num_bg_licks','first_lick', 'last_lick',
-                      'time_waited', 'time_waited_since_cue_on','time_waited_since_last_lick',
+    lagged_columns = ['bg_drawn', 'bg_length', 'bg_repeats', 'num_bg_licks', 'first_lick', 'last_lick',
+                      'time_waited', 'time_waited_since_cue_on', 'time_waited_since_last_lick',
+                      'time_waited_since_last_lick_bout', 'time_waited_since_last_reward',
                       'reward', 'num_consumption_lick', 'miss_trial']
     for col in lagged_columns:
         if col in trials.columns:
             fill_value = False if col == 'miss_trial' else 0
             trials[f'previous_trial_{col}'] = trials[col].shift(1).fillna(fill_value)
-            
+
     # Rolling averages
     rolling_metrics = ['bg_length', 'bg_repeats', 'num_bg_licks', 'first_lick', 'last_lick',
                        'time_waited', 'time_waited_since_cue_on', 'time_waited_since_last_lick',
+                       'time_waited_since_last_lick_bout', 'time_waited_since_last_reward',
                        'reward', 'num_consumption_lick']
     for metric in rolling_metrics:
         if metric in trials.columns:
@@ -594,26 +366,26 @@ def get_trial_progress(trials):
 
     trials['trial_fraction_in_session'] = (trials['session_trial_num'] + 1) / len(trials)
     trials['trial_fraction_in_block'] = (
-        (trials['block_trial_num'] + 1) / 
+        (trials['block_trial_num'] + 1) /
         trials['block_num'].map(trials['block_num'].value_counts())
     )
     trials['block_fraction_in_session'] = (trials['block_num'] + 1) / trials['block_num'].nunique()
-    
+
     return trials
 
 def get_rewarded_streak(trials):
     """Add rewarded and unrewarded streak features to trials dataframe."""
     trials = trials.copy()
     rewarded = trials['reward'].fillna(0) > 0
-    
+
     # Rewarded streak (consecutive rewarded trials)
     rewarded_streak = rewarded.groupby((~rewarded).cumsum()).cumsum()
     trials['rewarded_streak'] = rewarded_streak.shift(1, fill_value=0)
-    
+
     # Unrewarded streak (consecutive unrewarded trials)
     unrewarded_streak = (~rewarded).groupby(rewarded.cumsum()).cumsum()
     trials['unrewarded_streak'] = unrewarded_streak.shift(1, fill_value=0)
-    
+
     return trials
 
 def get_block_reward_metrics(trials, events):
@@ -626,8 +398,8 @@ def get_block_reward_metrics(trials, events):
     """
     trials = trials.copy()
     reward_events = events[
-        (events['key'] == 'consumption') & 
-        (events['reward_size'].notna()) & 
+        (events['key'] == 'consumption') &
+        (events['reward_size'].notna()) &
         (events['reward_size'] > 0)
     ]
     time_windows = [60, 300, 600]  # seconds
@@ -647,34 +419,49 @@ def get_block_reward_metrics(trials, events):
         ].sort_values('session_time')
         r_times = block_rewards['session_time'].values
         r_sizes = block_rewards['reward_size'].values
+        idx = block_trials.index
+        t_arr = block_trials['start_time'].values
 
-        for idx, row in block_trials.iterrows():
-            t = row['start_time']
-            mask = r_times < t
-            cum_rew = r_sizes[mask].sum()
-            trials.at[idx, 'cumulative_reward_in_block'] = cum_rew
+        # Prefix sums for O(log n) window queries via searchsorted
+        cumsum = np.concatenate([[0], np.cumsum(r_sizes)])
 
-            elapsed = t - block_start
-            if elapsed > 0:
-                trials.at[idx, 'reward_rate_since_block_start'] = cum_rew / elapsed
+        # Number of rewards strictly before each trial start
+        right_pos = np.searchsorted(r_times, t_arr, side='left')
 
-            if mask.any():
-                trials.at[idx, 'time_since_last_reward_in_block'] = t - r_times[mask].max()
+        # Cumulative reward in block
+        trials.loc[idx, 'cumulative_reward_in_block'] = cumsum[right_pos]
 
-            for w in time_windows:
-                w_start = max(t - w, block_start)
-                mask_w = (r_times >= w_start) & (r_times < t)
-                w_rew = r_sizes[mask_w].sum()
-                actual_w = t - w_start
-                if actual_w > 0:
-                    trials.at[idx, f'reward_rate_past_{w//60}min_in_block'] = w_rew / actual_w
-    
+        # Reward rate since block start
+        elapsed = t_arr - block_start
+        safe_elapsed = np.where(elapsed > 0, elapsed, 1.0)
+        trials.loc[idx, 'reward_rate_since_block_start'] = np.where(
+            elapsed > 0, cumsum[right_pos] / safe_elapsed, 0.0
+        )
+
+        # Time since last reward in block
+        has_prior = right_pos > 0
+        last_r_time = np.where(has_prior, r_times[np.clip(right_pos - 1, 0, len(r_times) - 1)], np.nan)
+        trials.loc[idx, 'time_since_last_reward_in_block'] = np.where(has_prior, t_arr - last_r_time, np.nan)
+
+        # Windowed reward rates
+        for w in time_windows:
+            w_start = np.maximum(t_arr - w, block_start)
+            left_pos = np.searchsorted(r_times, w_start, side='left')
+            w_rew = cumsum[right_pos] - cumsum[left_pos]
+            actual_w = t_arr - w_start
+            safe_actual_w = np.where(actual_w > 0, actual_w, 1.0)
+            trials.loc[idx, f'reward_rate_past_{w//60}min_in_block'] = np.where(
+                actual_w > 0, w_rew / safe_actual_w, 0.0
+            )
+
     trials['cumulative_reward'] = trials['reward'].fillna(0).cumsum().shift(fill_value=0)
     return trials
 
-def get_trial_features(trials_analyzed, events):
+def get_trial_features(trials_analyzed, events, session_bouts=None):
     trials_with_time_since_last_lick = get_time_since_last_lick(trials_analyzed, events)
-    trials_with_performance = get_previous_trial_performance(trials_with_time_since_last_lick)
+    trials_with_time_since_last_lick_bout = get_time_since_last_lick_bout(trials_with_time_since_last_lick, events, session_bouts)
+    trials_with_time_since_last_reward = get_time_since_last_reward(trials_with_time_since_last_lick_bout, events)
+    trials_with_performance = get_previous_trial_performance(trials_with_time_since_last_reward)
     trials_with_progress = get_trial_progress(trials_with_performance)
     trials_with_streak = get_rewarded_streak(trials_with_progress)
     trials_with_block_reward_metrics = get_block_reward_metrics(trials_with_streak, events)

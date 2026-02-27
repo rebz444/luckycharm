@@ -70,6 +70,10 @@ def generate_trials_analyzed_path(data_folder, session_info):
     filename = f'trials_analyzed_{session_info.dir}.csv'
     return os.path.join(data_folder, session_info.dir, filename)
 
+def generate_lick_bouts_path(data_dir):
+    """Generate path for the lick bouts output directory (under data root, not exp subfolder)."""
+    return os.path.join(data_dir, 'lick_bouts')
+
 # =============================================================================
 # Data analysis and utility functions
 # =============================================================================

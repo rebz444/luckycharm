@@ -8,11 +8,11 @@ match metadata, and sorts sessions by experiments.
 
 import os
 import json
-from session_processing_helper import (
-    backup_directory, identify_test_folders, 
+from session_qc_helper import (
+    backup_directory, identify_test_folders,
     identify_problematic_sessions, identify_short_or_crashed_sessions,
-    validate_session_directory_names, delete_sessions, 
-    sort_sessions_by_experiments, update_deletion_record
+    identify_sensor_bounce_sessions, validate_session_directory_names,
+    delete_sessions, sort_sessions_by_experiments, update_deletion_record
 )
 
 def delete_test_folders(data_dir, auto_delete=False):
@@ -82,11 +82,18 @@ def main(auto_delete=False):
     if not deletion_df_4.empty:
         deletion_records.append(deletion_df_4)
     
+    # Step 5: Identify and clean sensor bounce sessions
+    print("\nStep 5: Identifying sensor bounce sessions...")
+    bounce_sessions = identify_sensor_bounce_sessions(data_dir)
+    deletion_df_5 = delete_sessions(bounce_sessions, data_dir, "sensor bounce sessions", auto_delete)
+    if not deletion_df_5.empty:
+        deletion_records.append(deletion_df_5)
+
     # Update deletion record
     update_deletion_record(data_dir, deletion_records)
-    
-    # Step 5: Validate session directory names match metadata
-    print("\nStep 5: Validating session directory names match metadata...")
+
+    # Step 6: Validate session directory names match metadata
+    print("\nStep 6: Validating session directory names match metadata...")
     mismatched_df = validate_session_directory_names(data_dir)
     if not mismatched_df.empty:
         print(f"Found {len(mismatched_df)} sessions with mismatched directory names:")
@@ -95,9 +102,9 @@ def main(auto_delete=False):
         return
     else:
         print("All session directory names match their metadata.")
-    
-    # Step 6: Sort sessions by experiments
-    print("\nStep 6: Sorting sessions by experiments...")
+
+    # Step 7: Sort sessions by experiments
+    print("\nStep 7: Sorting sessions by experiments...")
     sort_sessions_by_experiments(data_dir, exp_info)
     
     print("\nSession quality control completed!\n")

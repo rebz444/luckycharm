@@ -52,24 +52,34 @@ def batch_generate_trials(sessions_training, data_folder, regenerate_trials=Fals
 def analyze_trials(sessions_training, data_folder, regenerate_analysis=False):
     """Analyze trials for all sessions and return problematic sessions."""
     print("\nAnalyzing trials data...")
-    
+
     problematic_sessions = pd.DataFrame(columns=sessions_training.columns)
     processed_count = 0
     skipped_count = 0
     error_count = 0
-    
+
+    # Load precomputed lick bouts once (produced by 4_lick_detection.py) and pre-group by session
+    bouts_path = os.path.join(os.path.dirname(data_folder), 'lick_bouts', 'bouts.csv')
+    if os.path.isfile(bouts_path):
+        bouts_all = pd.read_csv(bouts_path)
+        bouts_by_dir = {d: g.reset_index(drop=True) for d, g in bouts_all.groupby('dir')}
+    else:
+        bouts_by_dir = None
+        print("  Warning: bouts.csv not found — time_waited_since_last_lick_bout will be NaN")
+
     for idx, (_, session_info) in enumerate(sessions_training.iterrows(), 1):
         try:
             trials_analyzed_path = utils.generate_trials_analyzed_path(data_folder, session_info)
             if os.path.isfile(trials_analyzed_path) and not regenerate_analysis:
                 skipped_count += 1
                 continue
-            
+
             events = utils.load_data(utils.generate_events_processed_path(data_folder, session_info))
             trials = utils.load_data(utils.generate_trials_path(data_folder, session_info))
             trials_data = helper.get_trial_data_df(events.groupby('session_trial_num'))
             trials_analyzed = pd.merge(trials, trials_data, on='session_trial_num')
-            trials_with_features = helper.get_trial_features(trials_analyzed, events)
+            session_bouts = bouts_by_dir.get(session_info['dir']) if bouts_by_dir is not None else None
+            trials_with_features = helper.get_trial_features(trials_analyzed, events, session_bouts)
             trials_with_features[['group', 'dir']] = session_info[['group', 'dir']].values
             trials_with_features.to_csv(trials_analyzed_path)
             processed_count += 1
@@ -110,23 +120,24 @@ def main(sessions_training, test_mode=False, test_sessions=5, regenerate_trials=
     # Generate trials
     problematic_trials = batch_generate_trials(sessions_training, data_folder, regenerate_trials)
     if len(problematic_trials) > 0:
-        print(f"Found {len(problematic_trials)} problematic sessions during trial generation")
-        print(problematic_trials.to_string())
-        return
+        print(f"Warning: {len(problematic_trials)} sessions failed trial generation — skipping them in analysis")
+        print(problematic_trials[['dir']].to_string())
+        sessions_for_analysis = sessions_training[~sessions_training['dir'].isin(problematic_trials['dir'])]
     else:
         print("All sessions processed successfully for trial generation")
-    
-    # Analyze trials
-    problematic_analysis = analyze_trials(sessions_training, data_folder, regenerate_analysis)
+        sessions_for_analysis = sessions_training
+
+    # Analyze trials (on sessions that were successfully generated)
+    problematic_analysis = analyze_trials(sessions_for_analysis, data_folder, regenerate_analysis)
     if len(problematic_analysis) > 0:
-        print(f"Found {len(problematic_analysis)} problematic sessions during trial analysis")
-        print(problematic_analysis.to_string())
-        return
+        print(f"Warning: {len(problematic_analysis)} sessions failed trial analysis")
+        print(problematic_analysis[['dir']].to_string())
     else:
         print("All sessions analyzed successfully")
 
     if stitch_trials:
-        stitch_all_trials(data_folder, sessions_training)
+        sessions_for_stitch = sessions_for_analysis[~sessions_for_analysis['dir'].isin(problematic_analysis['dir'])]
+        stitch_all_trials(data_folder, sessions_for_stitch)
 
 
 
