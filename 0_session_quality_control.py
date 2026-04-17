@@ -77,7 +77,7 @@ def main(auto_delete=False):
     
     # Step 4: Identify and clean short/crashed sessions
     print("\nStep 4: Identifying and cleaning short sessions and crashed sessions...")
-    short_crashed_sessions = identify_short_or_crashed_sessions(data_dir, short_threshold=20)
+    short_crashed_sessions = identify_short_or_crashed_sessions(data_dir, short_threshold=35)
     deletion_df_4 = delete_sessions(short_crashed_sessions, data_dir, "short/crashed sessions", auto_delete)
     if not deletion_df_4.empty:
         deletion_records.append(deletion_df_4)

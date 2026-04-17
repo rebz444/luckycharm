@@ -24,7 +24,10 @@ def backup(source_dir):
 
 def load_data(path):
     """Load data from CSV file with index column."""
-    df = pd.read_csv(path, index_col=0)
+    try:
+        df = pd.read_csv(path, index_col=0)
+    except Exception:
+        df = pd.read_csv(path, index_col=0, engine='python')
     return df
 
 def load_session_log(data_folder, log_name):

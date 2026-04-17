@@ -1,6 +1,5 @@
 import os
 import math
-from pickle import FALSE
 import warnings
 
 import session_processing_helper as helper

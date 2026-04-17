@@ -283,8 +283,12 @@ def sort_sessions_by_experiments(data_dir, exp_info):
             _, _, mouse_name = item.split('_')
             for exp_name, mice in exp_info.items():
                 if mouse_name in mice:
+                    dest = os.path.join(exp_folders[exp_name], item)
+                    if os.path.exists(dest):
+                        print(f"Skipped {item} (already exists in {exp_name})")
+                        break
                     try:
-                        shutil.move(item_path, os.path.join(exp_folders[exp_name], item))
+                        shutil.move(item_path, dest)
                         moved_count += 1
                         print(f"Moved {item} to {exp_name}")
                         break

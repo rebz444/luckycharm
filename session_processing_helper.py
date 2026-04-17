@@ -193,7 +193,7 @@ def get_trial_bg_data(trial_events):
     bg_events = trial_events.loc[trial_events.state == 'in_background'].copy()
     bg_drawn = float(bg_events.iloc[0]['time_bg']) if not bg_events.empty else 0
     bg_length = wait_time - bg_time
-    bg_repeats = trial_events['key'].value_counts().get('background', 0)
+    bg_repeats = trial_events['key'].value_counts().get('background', 0) - 1
 
     # Extract background licks
     bg_licks = bg_events.loc[(bg_events['key'] == 'lick') & (bg_events['value'] == 1)]
@@ -277,12 +277,11 @@ def get_trial_data_df(session_by_trial):
     trials_data = pd.DataFrame(trial_data_list)
     return trials_data
 
-def _compute_time_since_anchor(trials, events, anchor_times_session, anchor_times_by_block, col_name):
+def _compute_time_since_anchor(trials, events, anchor_times_by_block, col_name):
     """
     For each trial, compute time from the most recent anchor event to the decision lick
-    (hit trials) or trial end (miss trials).
+    (hit trials) or trial end (miss trials). Both use block-scoped anchor times.
 
-    anchor_times_session  : sorted np.array of all anchor event times in the session
     anchor_times_by_block : dict {block_num: sorted np.array of anchor times}
     col_name              : output column name
     """
@@ -292,13 +291,16 @@ def _compute_time_since_anchor(trials, events, anchor_times_session, anchor_time
     ]
     first_decision_licks = decision_licks.groupby('session_trial_num')['session_time'].min()
 
-    # Hit trials: O(log n) searchsorted instead of O(n) boolean scan
-    for trial_num, dt in first_decision_licks.items():
-        pos = np.searchsorted(anchor_times_session, dt, side='left')
-        time_map[trial_num] = float(dt - anchor_times_session[pos - 1]) if pos > 0 else np.nan
-
-    # Miss trials: O(1) trial lookup via pre-indexed DataFrame
     trial_lookup = trials.set_index('session_trial_num')
+
+    # Hit trials: block-scoped anchor times
+    for trial_num, dt in first_decision_licks.items():
+        block = int(trial_lookup.loc[trial_num, 'block_num'])
+        block_times = anchor_times_by_block.get(block, np.array([]))
+        pos = np.searchsorted(block_times, dt, side='left')
+        time_map[trial_num] = float(dt - block_times[pos - 1]) if pos > 0 else np.nan
+
+    # Miss trials: block-scoped anchor times
     for t in np.setdiff1d(trials.session_trial_num.unique(), first_decision_licks.index.values):
         row = trial_lookup.loc[t]
         block_times = anchor_times_by_block.get(int(row['block_num']), np.array([]))
@@ -311,27 +313,34 @@ def _compute_time_since_anchor(trials, events, anchor_times_session, anchor_time
 def get_time_since_last_lick(trials, events):
     """Calculate time since the previous lick for each trial."""
     licks = events.loc[(events['key'] == 'lick') & (events['value'] == 1)]
-    all_times = np.sort(licks['session_time'].values)
     by_block = {b: np.sort(g['session_time'].values) for b, g in licks.groupby('block_num')}
-    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_lick')
+    return _compute_time_since_anchor(trials, events, by_block, 'time_waited_since_last_lick')
 
 def get_time_since_last_lick_bout(trials, events, session_bouts):
     """Calculate time since the end of the previous lick bout for each trial."""
     if session_bouts is None or session_bouts.empty:
         trials['time_waited_since_last_lick_bout'] = np.nan
         return trials
-    all_times = np.sort(session_bouts['bout_offset'].values)
-    by_block = {b: np.sort(g['bout_offset'].values) for b, g in session_bouts.groupby('block_num')}
-    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_lick_bout')
+    # Exclude bouts whose offset is a lick-off event in in_wait (state-boundary artifact:
+    # tongue was down when bg timer expired, so the lick offset lands in in_wait).
+    in_wait_offsets = set(
+        events.loc[(events['key'] == 'lick') & (events['value'] == 0) & (events['state'] == 'in_wait'),
+                   'session_time']
+    )
+    bouts = session_bouts[~session_bouts['bout_offset'].isin(in_wait_offsets)]
+    if bouts.empty:
+        trials['time_waited_since_last_lick_bout'] = np.nan
+        return trials
+    by_block = {b: np.sort(g['bout_offset'].values) for b, g in bouts.groupby('block_num')}
+    return _compute_time_since_anchor(trials, events, by_block, 'time_waited_since_last_lick_bout')
 
 def get_time_since_last_reward(trials, events):
     """Calculate time since the last reward for each trial."""
     rewards = events.loc[
         (events['key'] == 'consumption') & (events['reward_size'].notna()) & (events['reward_size'] > 0)
     ]
-    all_times = np.sort(rewards['session_time'].values)
     by_block = {b: np.sort(g['session_time'].values) for b, g in rewards.groupby('block_num')}
-    return _compute_time_since_anchor(trials, events, all_times, by_block, 'time_waited_since_last_reward')
+    return _compute_time_since_anchor(trials, events, by_block, 'time_waited_since_last_reward')
 
 def get_previous_trial_performance(trials, rolling_windows=[5, 10]):
     """Add lagged trial features and rolling averages."""

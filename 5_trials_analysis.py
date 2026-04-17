@@ -136,10 +136,13 @@ def main(sessions_training, test_mode=False, test_sessions=5, regenerate_trials=
         print("All sessions analyzed successfully")
 
     if stitch_trials:
+        print("\nStitching all analyzed trials together...")
         sessions_for_stitch = sessions_for_analysis[~sessions_for_analysis['dir'].isin(problematic_analysis['dir'])]
         stitch_all_trials(data_folder, sessions_for_stitch)
+        print("All trials stitched together successfully")
 
 
 
 if __name__ == "__main__":
-    main(sessions_training, test_mode=False, test_sessions=20, regenerate_trials=False, regenerate_analysis=True, stitch_trials=True)
+    main(sessions_training, test_mode=False, test_sessions=20, 
+         regenerate_trials=False, regenerate_analysis=True, stitch_trials=True)
